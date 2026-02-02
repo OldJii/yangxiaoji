@@ -81,11 +81,6 @@
       <span class="index-value" id="indexValue">--</span>
       <span class="index-change" id="indexChange">--</span>
       <span class="index-percent" id="indexPercent">--</span>
-      <button class="index-toggle" id="indexToggle">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M18 15l-6-6-6 6"/>
-        </svg>
-      </button>
     </div>
 
     <!-- 搜索弹层 -->
@@ -127,6 +122,11 @@
       </div>
     </div>
 
+    <!-- 账户管理弹层 -->
+    <div class="modal" id="accountModal">
+      <div class="account-page" id="accountPage"></div>
+    </div>
+
     <!-- 新增持有弹层 -->
     <div class="modal" id="addModal">
       <div class="add-page">
@@ -150,10 +150,10 @@
           </button>
         </div>
         <div class="add-footer">
-          <label class="checkbox-wrap">
-            <input type="checkbox" id="syncWatch" checked>
-            <span class="checkbox-text">同步添加到自选</span>
-          </label>
+          <div class="add-account-select">
+            <span class="add-account-label">添加到：</span>
+            <select id="accountSelect" class="account-select"></select>
+          </div>
           <button class="submit-btn" id="submitBtn">完成 (0)</button>
         </div>
       </div>
@@ -167,6 +167,11 @@
     <!-- 板块总览弹层 -->
     <div class="modal" id="sectorModal">
       <div class="sector-page" id="sectorPage"></div>
+    </div>
+
+    <!-- 板块基金弹层 -->
+    <div class="modal" id="sectorFundsModal">
+      <div class="sector-funds-page" id="sectorFundsPage"></div>
     </div>
 
     <!-- Toast -->

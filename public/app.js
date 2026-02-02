@@ -11,7 +11,7 @@
   // ==========================================
   
   const API = '/api/index';
-  const CACHE_TTL = 30 * 1000; // 30秒缓存
+  const CACHE_TTL = 60 * 1000; // 60秒缓存
   const STORAGE_KEYS = {
     holdings: 'yxj_holdings',
     watchlist: 'yxj_watchlist',
@@ -27,12 +27,15 @@
   const state = {
     currentPage: 'hold',
     currentAccount: 'summary', // summary, all, 或账户ID
-    accounts: [],    // 用户账户列表
-    holdings: {},    // 持仓数据 {accountId: [{code, name, amount, profit}]}
-    watchlist: [],   // 自选列表 [{code, name}]
-    cache: {},       // API缓存
+    accounts: [],
+    holdings: {},
+    watchlist: [],
+    cache: {},
     searchHistory: [],
-    loading: {}
+    // 排序状态
+    holdSort: { field: 'profit', asc: false },
+    watchSort: { field: 'change', asc: false },
+    sectorSort: { field: 'change', asc: false }
   };
 
   // ==========================================
@@ -43,20 +46,23 @@
   const $$ = sel => document.querySelectorAll(sel);
   
   const fmt = (n, decimals = 2) => {
-    if (typeof n !== 'number' || isNaN(n)) return '--';
-    return n.toLocaleString('zh-CN', { 
+    if (n === undefined || n === null || n === '' || isNaN(n)) return '--';
+    const num = parseFloat(n);
+    if (isNaN(num)) return '--';
+    return num.toLocaleString('zh-CN', { 
       minimumFractionDigits: decimals, 
       maximumFractionDigits: decimals 
     });
   };
   
   const sign = n => {
-    if (typeof n !== 'number' || isNaN(n)) return '';
-    return n >= 0 ? '+' : '';
+    const num = parseFloat(n);
+    if (isNaN(num)) return '';
+    return num >= 0 ? '+' : '';
   };
   
   const cls = v => {
-    const n = parseFloat(String(v).replace('%', ''));
+    const n = parseFloat(String(v).replace('%', '').replace('+', ''));
     if (isNaN(n)) return '';
     return n > 0 ? 'rise' : n < 0 ? 'fall' : '';
   };
@@ -101,10 +107,7 @@
 
   const loadState = () => {
     state.accounts = storage.get(STORAGE_KEYS.accounts, [
-      { id: 'boduan', name: '波段' },
-      { id: 'changchi', name: '长持' },
-      { id: 'wenjian', name: '稳健' },
-      { id: 'daiqingcang', name: '待清仓' }
+      { id: 'default', name: '默认' }
     ]);
     state.holdings = storage.get(STORAGE_KEYS.holdings, {});
     state.watchlist = storage.get(STORAGE_KEYS.watchlist, []);
@@ -117,14 +120,13 @@
   const saveSearchHistory = () => storage.set(STORAGE_KEYS.searchHistory, state.searchHistory);
 
   // ==========================================
-  // API 请求
+  // API 请求（带缓存）
   // ==========================================
   
   const api = async (endpoint, params = {}) => {
     const url = new URL(endpoint, location.origin);
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
     
-    // 检查缓存
     const cacheKey = url.toString();
     const cached = state.cache[cacheKey];
     if (cached && Date.now() - cached.ts < CACHE_TTL) {
@@ -134,13 +136,11 @@
     try {
       const resp = await fetch(url, { 
         headers: { 'Accept': 'application/json' },
-        signal: AbortSignal.timeout(10000)
+        signal: AbortSignal.timeout(15000)
       });
       const data = await resp.json();
       
-      // 更新缓存
       state.cache[cacheKey] = { data, ts: Date.now() };
-      
       return data;
     } catch (e) {
       console.error('API Error:', e);
@@ -166,11 +166,9 @@
       <button class="header-tab ${state.currentAccount === tab.id ? 'active' : ''}" 
               data-account="${tab.id}">${tab.name}</button>
     `).join('') + `
-      <button class="header-tab" id="addAccountBtn">+</button>
-      <button class="header-tab" id="manageAccountBtn">☰</button>
+      <button class="header-tab menu-btn" id="manageAccountBtn">☰</button>
     `;
     
-    // 绑定事件
     tabs.querySelectorAll('.header-tab[data-account]').forEach(btn => {
       btn.onclick = () => {
         state.currentAccount = btn.dataset.account;
@@ -178,6 +176,8 @@
         renderHoldPage();
       };
     });
+    
+    $('manageAccountBtn').onclick = openAccountManageModal;
   };
 
   const renderHoldPage = async () => {
@@ -194,7 +194,6 @@
   };
 
   const renderAccountSummary = async (page) => {
-    // 计算所有账户的汇总数据
     const allCodes = [];
     Object.values(state.holdings).forEach(list => {
       list.forEach(h => {
@@ -210,7 +209,6 @@
       }
     }
     
-    // 计算各账户数据
     let totalAsset = 0;
     let totalProfit = 0;
     const accountStats = state.accounts.map(acc => {
@@ -244,7 +242,8 @@
         dayProfit: profit,
         dayProfitPct,
         upCount,
-        downCount
+        downCount,
+        fundCount: holdings.length
       };
     });
     
@@ -262,17 +261,10 @@
         ${accountStats.map(acc => `
           <div class="account-card" data-account="${acc.id}">
             <div class="account-card-header">
-              <div class="account-card-name">
-                <div class="account-card-icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
-                  </svg>
-                </div>
-                ${acc.name}
-              </div>
+              <div class="account-card-name">${acc.name}</div>
               <div class="account-card-stats">
-                <span class="stat-up">↑ ${acc.upCount}</span>
-                <span class="stat-down">↓ ${acc.downCount}</span>
+                <span class="stat-up">↑${acc.upCount}</span>
+                <span class="stat-down">↓${acc.downCount}</span>
               </div>
             </div>
             <div class="account-card-body">
@@ -283,12 +275,10 @@
               <div class="account-card-item">
                 <div class="account-card-item-label">持有收益</div>
                 <div class="account-card-item-value ${cls(acc.holdProfit)}">${sign(acc.holdProfit)}${fmt(acc.holdProfit)}</div>
-                <div class="account-card-item-sub ${cls(acc.holdProfitPct)}">${sign(acc.holdProfitPct)}${fmt(acc.holdProfitPct)}%</div>
               </div>
               <div class="account-card-item">
                 <div class="account-card-item-label">当日收益</div>
                 <div class="account-card-item-value ${cls(acc.dayProfit)}">${sign(acc.dayProfit)}${fmt(acc.dayProfit)}</div>
-                <div class="account-card-item-sub ${cls(acc.dayProfitPct)}">${sign(acc.dayProfitPct)}${fmt(acc.dayProfitPct)}%</div>
               </div>
             </div>
           </div>
@@ -296,7 +286,6 @@
       </div>
     `;
     
-    // 绑定账户卡片点击
     page.querySelectorAll('.account-card').forEach(card => {
       card.onclick = () => {
         state.currentAccount = card.dataset.account;
@@ -307,7 +296,6 @@
   };
 
   const renderAllHoldings = async (page) => {
-    // 收集所有持仓
     const allHoldings = [];
     Object.entries(state.holdings).forEach(([accId, list]) => {
       list.forEach(h => {
@@ -321,19 +309,17 @@
       });
     });
     
-    await renderFundList(page, allHoldings, false);
+    await renderFundList(page, allHoldings, null);
   };
 
   const renderAccountHoldings = async (page, accountId) => {
     const holdings = state.holdings[accountId] || [];
-    await renderFundList(page, holdings, true, accountId);
+    await renderFundList(page, holdings, accountId);
   };
 
-  const renderFundList = async (page, holdings, showAddBtn, accountId = null) => {
-    // 计算总资产
+  const renderFundList = async (page, holdings, accountId) => {
     let totalAsset = holdings.reduce((sum, h) => sum + (h.amount || 0), 0);
     
-    // 获取实时估值
     let fundData = {};
     const codes = holdings.map(h => h.code).filter(Boolean);
     if (codes.length > 0) {
@@ -343,7 +329,6 @@
       }
     }
     
-    // 计算收益
     let totalProfit = 0;
     const enrichedHoldings = holdings.map(h => {
       const fund = fundData[h.code] || {};
@@ -353,10 +338,17 @@
       return { ...h, ...fund, dayProfit, change };
     });
     
-    // 按收益排序
-    enrichedHoldings.sort((a, b) => b.dayProfit - a.dayProfit);
+    // 排序
+    const sortField = state.holdSort.field;
+    const sortAsc = state.holdSort.asc;
+    enrichedHoldings.sort((a, b) => {
+      let va = sortField === 'profit' ? a.dayProfit : a.change;
+      let vb = sortField === 'profit' ? b.dayProfit : b.change;
+      return sortAsc ? va - vb : vb - va;
+    });
     
-    const today = new Date().toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+    const profitActive = sortField === 'profit';
+    const changeActive = sortField === 'change';
     
     page.innerHTML = `
       <div class="account-section">
@@ -369,21 +361,12 @@
         </div>
       </div>
       <div class="list-header">
-        <div class="list-header-left">
-          <span class="list-header-icon">⚙️</span>
-          <span class="list-header-icon">📊</span>
-          <span class="list-header-icon">👤</span>
-          <span class="list-header-icon">≡</span>
+        <div class="list-header-col list-header-col-name">基金</div>
+        <div class="list-header-col sortable ${profitActive ? 'active' : ''}" data-sort="profit">
+          当日收益 ${profitActive ? (sortAsc ? '↑' : '↓') : ''}
         </div>
-        <div class="list-header-right">
-          <div class="list-header-col">
-            <div class="list-header-col-label">当日收益</div>
-            <div class="list-header-col-date">${today}</div>
-          </div>
-          <div class="list-header-col">
-            <div class="list-header-col-label">当日涨幅</div>
-            <div class="list-header-col-date">${today}</div>
-          </div>
+        <div class="list-header-col sortable ${changeActive ? 'active' : ''}" data-sort="change">
+          当日涨幅 ${changeActive ? (sortAsc ? '↑' : '↓') : ''}
         </div>
       </div>
       <div class="fund-list">
@@ -391,13 +374,9 @@
           <div class="fund-item" data-code="${h.code}">
             <div class="fund-info">
               <div class="fund-name">${h.name || h.code}</div>
-              <div class="fund-meta">
-                <span class="fund-amount">¥ ${fmt(h.amount)}</span>
-              </div>
+              <div class="fund-meta">¥${fmt(h.amount)}</div>
             </div>
-            <div class="fund-profit">
-              <div class="fund-profit-value ${cls(h.dayProfit)}">${sign(h.dayProfit)}${fmt(h.dayProfit)}</div>
-            </div>
+            <div class="fund-profit ${cls(h.dayProfit)}">${sign(h.dayProfit)}${fmt(h.dayProfit)}</div>
             <div class="fund-change ${cls(h.change)}">${sign(h.change)}${fmt(h.change)}%</div>
           </div>
         `).join('') : `
@@ -407,26 +386,144 @@
           </div>
         `}
       </div>
-      ${showAddBtn ? `
-        <button class="add-holding-btn" data-account="${accountId}">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 5v14M5 12h14"/>
-          </svg>
-          新增持有
-        </button>
+      ${accountId ? `
+        <button class="add-holding-btn" data-account="${accountId}">+ 新增持有</button>
       ` : ''}
     `;
     
-    // 绑定基金项点击
+    // 排序点击
+    page.querySelectorAll('.sortable').forEach(el => {
+      el.onclick = () => {
+        const field = el.dataset.sort;
+        if (state.holdSort.field === field) {
+          state.holdSort.asc = !state.holdSort.asc;
+        } else {
+          state.holdSort.field = field;
+          state.holdSort.asc = false;
+        }
+        renderFundList(page, holdings, accountId);
+      };
+    });
+    
     page.querySelectorAll('.fund-item').forEach(item => {
       item.onclick = () => openFundDetail(item.dataset.code);
     });
     
-    // 绑定新增按钮
     const addBtn = page.querySelector('.add-holding-btn');
     if (addBtn) {
       addBtn.onclick = () => openAddModal(addBtn.dataset.account);
     }
+  };
+
+  // ==========================================
+  // 账户管理弹层
+  // ==========================================
+  
+  const openAccountManageModal = () => {
+    const modal = $('accountModal');
+    if (!modal) return;
+    
+    modal.classList.add('active');
+    renderAccountManage();
+  };
+
+  const closeAccountManageModal = () => {
+    $('accountModal')?.classList.remove('active');
+    renderHoldTabs();
+    renderHoldPage();
+  };
+
+  const renderAccountManage = () => {
+    const page = $('accountPage');
+    if (!page) return;
+    
+    const canMoveUp = index => index > 0;
+    const canMoveDown = index => index < state.accounts.length - 1;
+
+    page.innerHTML = `
+      <div class="modal-header">
+        <button class="back-btn" id="accountBack">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M15 18l-6-6 6-6"/>
+          </svg>
+        </button>
+        <h1 class="modal-title">账户管理</h1>
+        <button class="add-account-btn" id="addAccountBtn">添加</button>
+      </div>
+      <div class="account-manage-list">
+        ${state.accounts.map((acc, i) => `
+          <div class="account-manage-item" data-id="${acc.id}">
+            <span class="account-manage-name">${acc.name}</span>
+            <div class="account-manage-actions">
+              <button class="account-move-btn" data-id="${acc.id}" data-move="up" ${canMoveUp(i) ? '' : 'disabled'}>上移</button>
+              <button class="account-move-btn" data-id="${acc.id}" data-move="down" ${canMoveDown(i) ? '' : 'disabled'}>下移</button>
+              <button class="account-edit-btn" data-id="${acc.id}" data-name="${acc.name}">编辑</button>
+              ${state.accounts.length > 1 ? `<button class="account-delete-btn" data-id="${acc.id}">删除</button>` : ''}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+    
+    $('accountBack').onclick = closeAccountManageModal;
+    $('addAccountBtn').onclick = () => {
+      const name = prompt('请输入账户名称');
+      if (name && name.trim()) {
+        const id = 'acc_' + Date.now();
+        state.accounts.push({ id, name: name.trim() });
+        saveAccounts();
+        renderAccountManage();
+        toast('账户已添加');
+      }
+    };
+    
+    page.querySelectorAll('.account-edit-btn').forEach(btn => {
+      btn.onclick = () => {
+        const id = btn.dataset.id;
+        const oldName = btn.dataset.name;
+        const newName = prompt('请输入新的账户名称', oldName);
+        if (newName && newName.trim()) {
+          const acc = state.accounts.find(a => a.id === id);
+          if (acc) {
+            acc.name = newName.trim();
+            saveAccounts();
+            renderAccountManage();
+            toast('账户已更新');
+          }
+        }
+      };
+    });
+    
+    page.querySelectorAll('.account-delete-btn').forEach(btn => {
+      btn.onclick = () => {
+        const id = btn.dataset.id;
+        if (confirm('确定要删除该账户吗？账户内的持仓数据也会被删除。')) {
+          state.accounts = state.accounts.filter(a => a.id !== id);
+          delete state.holdings[id];
+          saveAccounts();
+          saveHoldings();
+          renderAccountManage();
+          toast('账户已删除');
+        }
+      };
+    });
+
+    page.querySelectorAll('.account-move-btn').forEach(btn => {
+      btn.onclick = () => {
+        if (btn.disabled) return;
+        const id = btn.dataset.id;
+        const move = btn.dataset.move;
+        const idx = state.accounts.findIndex(a => a.id === id);
+        if (idx === -1) return;
+        const targetIdx = move === 'up' ? idx - 1 : idx + 1;
+        if (targetIdx < 0 || targetIdx >= state.accounts.length) return;
+        const swapped = [...state.accounts];
+        [swapped[idx], swapped[targetIdx]] = [swapped[targetIdx], swapped[idx]];
+        state.accounts = swapped;
+        saveAccounts();
+        renderAccountManage();
+      };
+    });
   };
 
   // ==========================================
@@ -437,11 +534,6 @@
     const page = $('page-watch');
     if (!page) return;
     
-    // 获取板块数据
-    const sectorResp = await api(`${API}?module=sector`, { action: 'streak' });
-    const sectors = sectorResp.success ? sectorResp.data.slice(0, 5) : [];
-    
-    // 获取自选基金估值
     let watchData = [];
     if (state.watchlist.length > 0) {
       const codes = state.watchlist.map(w => w.code).join(',');
@@ -451,54 +543,50 @@
       }
     }
     
+    // 排序
+    const sortAsc = state.watchSort.asc;
+    const enrichedWatch = state.watchlist.map(w => {
+      const data = watchData.find(d => d.code === w.code) || {};
+      return { ...w, change: parseFloat(data.estimate_change) || 0 };
+    });
+    
+    enrichedWatch.sort((a, b) => sortAsc ? a.change - b.change : b.change - a.change);
+    
     page.innerHTML = `
-      <div class="sector-entry">
-        <div class="sector-entry-header">
-          <span class="section-title">板块总览</span>
-          <span class="sector-entry-arrow" id="openSectorBtn">›</span>
-        </div>
-        ${sectors.map(s => `
-          <div class="sector-entry-item">
-            <div class="sector-entry-info">
-              <div class="sector-entry-name">${s.name}</div>
-              <div class="sector-entry-count">${s.funds}只基金</div>
-            </div>
-            <div class="sector-entry-streak ${s.streak_days >= 0 ? 'rise' : 'fall'}">
-              ${s.streak_days >= 0 ? '连涨' : '连跌'} ${Math.abs(s.streak_days)} 天
-            </div>
-            <div class="sector-entry-change ${cls(s.change_percent)}">${s.change_percent}</div>
-          </div>
-        `).join('')}
+      <div class="watch-header">
+        <span class="watch-title">自选基金</span>
+        <span class="watch-count">${state.watchlist.length}只</span>
       </div>
-      
-      <div class="watch-section">
-        <div class="watch-header">
-          <span class="watch-title">自选风向标</span>
-          <span class="sector-entry-arrow">›</span>
+      <div class="list-header">
+        <div class="list-header-col list-header-col-name">基金</div>
+        <div class="list-header-col sortable active" id="watchSortBtn">
+          当日涨幅 ${sortAsc ? '↑' : '↓'}
         </div>
-        ${state.watchlist.length > 0 ? state.watchlist.map((w, i) => {
-          const data = watchData.find(d => d.code === w.code) || {};
-          return `
-            <div class="watch-item" data-code="${w.code}">
-              <span class="watch-rank">${i + 1}</span>
-              <div class="watch-info">
-                <div class="watch-name">${w.name}</div>
-                <div class="watch-code">${w.code}</div>
-              </div>
-              <div class="watch-change ${cls(data.estimate_change)}">${data.estimate_change || '0.00'}%</div>
+      </div>
+      <div class="watch-list">
+        ${enrichedWatch.length > 0 ? enrichedWatch.map(w => `
+          <div class="watch-item" data-code="${w.code}">
+            <div class="watch-info">
+              <div class="watch-name">${w.name}</div>
+              <div class="watch-code">${w.code}</div>
             </div>
-          `;
-        }).join('') : `
+            <div class="watch-change ${cls(w.change)}">${sign(w.change)}${fmt(w.change)}%</div>
+          </div>
+        `).join('') : `
           <div class="empty">
             <div class="empty-icon">⭐</div>
             <div class="empty-text">暂无自选</div>
+            <div class="empty-hint">搜索基金添加到自选</div>
           </div>
         `}
       </div>
     `;
     
-    // 绑定事件
-    $('openSectorBtn')?.addEventListener('click', openSectorModal);
+    $('watchSortBtn')?.addEventListener('click', () => {
+      state.watchSort.asc = !state.watchSort.asc;
+      renderWatchPage();
+    });
+    
     page.querySelectorAll('.watch-item').forEach(item => {
       item.onclick = () => openFundDetail(item.dataset.code);
     });
@@ -517,25 +605,14 @@
         <div class="index-cards" id="indexCards">
           <div class="loading"><div class="spinner"></div></div>
         </div>
-        <div class="distribution-section" id="distributionSection">
-          <div class="loading"><div class="spinner"></div></div>
-        </div>
-        <div class="fund-section" id="hotFundsSection">
-          <div class="loading"><div class="spinner"></div></div>
-        </div>
-        <div class="sector-entry" id="sectorEntrySection">
+        <div class="sector-section" id="sectorSection">
           <div class="loading"><div class="spinner"></div></div>
         </div>
       </div>
     `;
     
-    // 并行加载数据
-    Promise.all([
-      loadIndices(),
-      loadDistribution(),
-      loadHotFunds(),
-      loadSectorEntry()
-    ]);
+    loadIndices();
+    loadSectorSection();
   };
 
   const loadIndices = async () => {
@@ -552,7 +629,6 @@
         </div>
       `).join('');
       
-      // 更新底部指数栏
       const sh = resp.data[0];
       if (sh) {
         $('indexValue').textContent = sh.value;
@@ -564,116 +640,39 @@
     }
   };
 
-  const loadDistribution = async () => {
-    const container = $('distributionSection');
-    if (!container) return;
-    
-    const resp = await api(`${API}?module=market`, { action: 'distribution' });
-    if (resp.success) {
-      const d = resp.data;
-      const dist = d.distribution;
-      const maxCount = Math.max(
-        dist.lt_neg5, dist.neg5_neg3, dist.neg3_neg1, dist.neg1_0,
-        dist.zero, dist['0_1'], dist['1_3'], dist['3_5'], dist.gt_5
-      ) || 1;
-      
-      const bars = [
-        { label: '≤-5', count: dist.lt_neg5, type: 'fall' },
-        { label: '-5~-3', count: dist.neg5_neg3, type: 'fall' },
-        { label: '-3~-1', count: dist.neg3_neg1, type: 'fall' },
-        { label: '-1~0', count: dist.neg1_0, type: 'fall' },
-        { label: '0', count: dist.zero, type: 'fall' },
-        { label: '0~1', count: dist['0_1'], type: 'rise' },
-        { label: '1~3', count: dist['1_3'], type: 'rise' },
-        { label: '3~5', count: dist['3_5'], type: 'rise' },
-        { label: '≥5', count: dist.gt_5, type: 'rise' }
-      ];
-      
-      const totalCount = d.up_count + d.down_count;
-      const downPct = totalCount > 0 ? (d.down_count / totalCount * 100) : 50;
-      
-      container.innerHTML = `
-        <div class="section-header">
-          <span class="section-title">基金涨跌分布</span>
-          <span class="section-time">更新: ${d.update_time}</span>
-        </div>
-        <div class="distribution-chart">
-          ${bars.map(b => `
-            <div class="distribution-bar">
-              <span class="distribution-bar-count">${b.count}</span>
-              <div class="distribution-bar-inner ${b.type}" style="height: ${b.count / maxCount * 100}px"></div>
-              <span class="distribution-bar-label">${b.label}</span>
-            </div>
-          `).join('')}
-        </div>
-        <div class="distribution-summary">
-          <div class="distribution-down-bar" style="width: ${downPct}%"></div>
-          <div class="distribution-up-bar" style="width: ${100 - downPct}%"></div>
-        </div>
-        <div class="distribution-labels">
-          <span class="distribution-down-label">下跌 ${d.down_count}</span>
-          <span class="distribution-up-label">${d.up_count} 上涨</span>
-        </div>
-      `;
-    }
-  };
-
-  const loadHotFunds = async () => {
-    const container = $('hotFundsSection');
-    if (!container) return;
-    
-    const resp = await api(`${API}?module=fund`, { action: 'hot' });
-    if (resp.success) {
-      container.innerHTML = `
-        <div class="fund-section-header">
-          <span class="fund-section-title">场外基金</span>
-          <span class="fund-section-arrow">›</span>
-        </div>
-        ${resp.data.slice(0, 5).map(f => `
-          <div class="fund-section-item" data-code="${f.code}">
-            <div class="fund-section-info">
-              <div class="fund-section-name">${f.name}</div>
-              <div class="fund-section-code">${f.code}</div>
-            </div>
-            <span class="fund-section-change">-</span>
-            <span class="fund-section-change ${cls(f.change)}">${f.change}%</span>
-          </div>
-        `).join('')}
-      `;
-      
-      container.querySelectorAll('.fund-section-item').forEach(item => {
-        item.onclick = () => openFundDetail(item.dataset.code);
-      });
-    }
-  };
-
-  const loadSectorEntry = async () => {
-    const container = $('sectorEntrySection');
+  const loadSectorSection = async () => {
+    const container = $('sectorSection');
     if (!container) return;
     
     const resp = await api(`${API}?module=sector`, { action: 'streak' });
     if (resp.success) {
-      const sectors = resp.data.slice(0, 3);
+      const sectors = resp.data;
       container.innerHTML = `
-        <div class="sector-entry-header" id="sectorEntryHeader">
+        <div class="section-header" id="openSectorBtn">
           <span class="section-title">板块总览</span>
-          <span class="sector-entry-arrow">›</span>
+          <span class="section-arrow">全部 ›</span>
         </div>
-        ${sectors.map(s => `
-          <div class="sector-entry-item">
-            <div class="sector-entry-info">
-              <div class="sector-entry-name">${s.name}</div>
-              <div class="sector-entry-count">${s.funds}只基金</div>
+        <div class="sector-list sector-list-compact">
+          ${sectors.map(s => `
+            <div class="sector-item">
+              <div class="sector-info">
+                <div class="sector-name">${s.name}</div>
+              </div>
+              <div class="sector-col-value ${cls(s.change_percent)}">${s.change_percent}</div>
+              <div class="sector-col-value ${s.streak_days >= 0 ? 'rise' : 'fall'}">${s.streak_days}天</div>
             </div>
-            <div class="sector-entry-streak ${s.streak_days >= 0 ? 'rise' : 'fall'}">
-              ${s.streak_days >= 0 ? '连涨' : '连跌'} ${Math.abs(s.streak_days)} 天
-            </div>
-            <div class="sector-entry-change ${cls(s.change_percent)}">${s.change_percent}</div>
-          </div>
-        `).join('')}
+          `).join('')}
+        </div>
       `;
       
-      $('sectorEntryHeader')?.addEventListener('click', openSectorModal);
+      container.onclick = () => openSectorModal();
+    } else {
+      container.innerHTML = `
+        <div class="empty">
+          <div class="empty-icon">📊</div>
+          <div class="empty-text">${resp.message || '板块数据获取失败'}</div>
+        </div>
+      `;
     }
   };
 
@@ -681,23 +680,60 @@
   // 页面渲染 - 资讯
   // ==========================================
   
-  const renderNewsPage = () => {
+  const renderNewsPage = async () => {
     const page = $('page-news');
     if (!page) return;
     
     page.innerHTML = `
-      <div class="empty" style="padding-top: 120px;">
-        <div class="empty-icon">📰</div>
-        <div class="empty-text">资讯功能开发中...</div>
+      <div class="news-header">
+        <span class="news-title">基金资讯</span>
+      </div>
+      <div class="news-list" id="newsList">
+        <div class="loading"><div class="spinner"></div></div>
       </div>
     `;
+    
+    const resp = await api(`${API}?module=news`, { action: 'list' });
+    const newsList = $('newsList');
+    
+    if (resp.success && resp.data.length > 0) {
+      newsList.innerHTML = resp.data.map(news => `
+        <div class="news-item" ${news.url ? `data-url="${news.url}"` : ''}>
+          <div class="news-content">
+            <div class="news-item-title">${news.title}</div>
+            <div class="news-item-summary">${news.summary || ''}</div>
+            <div class="news-item-meta">
+              <span class="news-source">${news.source}</span>
+              <span class="news-time">${news.time}</span>
+            </div>
+          </div>
+        </div>
+      `).join('');
+      
+      newsList.querySelectorAll('.news-item[data-url]').forEach(item => {
+        item.onclick = () => {
+          const url = item.dataset.url;
+          if (url) window.open(url, '_blank');
+        };
+      });
+    } else {
+      newsList.innerHTML = `
+        <div class="empty">
+          <div class="empty-icon">📰</div>
+          <div class="empty-text">暂无资讯</div>
+        </div>
+      `;
+    }
   };
 
   // ==========================================
   // 弹层 - 搜索
   // ==========================================
   
-  const openSearchModal = () => {
+  let fundPickerCallback = null;
+
+  const openSearchModal = (callback = null) => {
+    fundPickerCallback = callback;
     const modal = $('searchModal');
     if (!modal) return;
     
@@ -710,13 +746,13 @@
     $('searchModal')?.classList.remove('active');
     $('searchInput').value = '';
     $('searchClear').classList.remove('show');
+    fundPickerCallback = null;
   };
 
   const renderSearchContent = () => {
     const historyList = $('historyList');
     const hotList = $('hotList');
     
-    // 渲染历史
     if (historyList) {
       historyList.innerHTML = state.searchHistory.slice(0, 8).map(h => `
         <button class="history-tag" data-keyword="${h}">${h}</button>
@@ -730,7 +766,6 @@
       });
     }
     
-    // 加载热搜
     loadHotSearch();
   };
 
@@ -741,7 +776,7 @@
     const resp = await api(`${API}?module=fund`, { action: 'hot' });
     if (resp.success) {
       hotList.innerHTML = resp.data.slice(0, 5).map((f, i) => `
-        <div class="hot-item" data-code="${f.code}">
+        <div class="hot-item" data-code="${f.code}" data-name="${f.name}">
           <span class="hot-rank">${i + 1}</span>
           <div class="hot-info">
             <div class="hot-name">${f.name}</div>
@@ -752,8 +787,15 @@
       
       hotList.querySelectorAll('.hot-item').forEach(item => {
         item.onclick = () => {
-          addSearchHistory(item.querySelector('.hot-name').textContent);
-          openFundDetail(item.dataset.code);
+          const code = item.dataset.code;
+          const name = item.dataset.name;
+          addSearchHistory(name);
+          if (fundPickerCallback) {
+            fundPickerCallback(code, name);
+            closeSearchModal();
+          } else {
+            openFundDetail(code);
+          }
         };
       });
     }
@@ -778,7 +820,7 @@
     
     if (resp.success && resp.data.length > 0) {
       results.innerHTML = resp.data.map(f => `
-        <div class="result-item" data-code="${f.code}">
+        <div class="result-item" data-code="${f.code}" data-name="${f.name}">
           <div class="result-icon">基</div>
           <div class="result-info">
             <div class="result-name">${f.name}</div>
@@ -797,8 +839,15 @@
       results.querySelectorAll('.result-item').forEach(item => {
         item.onclick = (e) => {
           if (e.target.classList.contains('result-action')) return;
-          addSearchHistory(item.querySelector('.result-name').textContent);
-          openFundDetail(item.dataset.code);
+          const code = item.dataset.code;
+          const name = item.dataset.name;
+          addSearchHistory(name);
+          if (fundPickerCallback) {
+            fundPickerCallback(code, name);
+            closeSearchModal();
+          } else {
+            openFundDetail(code);
+          }
         };
       });
       
@@ -839,7 +888,7 @@
   let addTargetAccount = null;
 
   const openAddModal = (accountId) => {
-    addTargetAccount = accountId;
+    addTargetAccount = accountId || (state.accounts[0]?.id);
     addFormItems = [{ code: '', name: '', amount: '', profit: '' }];
     renderAddForm();
     $('addModal')?.classList.add('active');
@@ -853,44 +902,49 @@
 
   const renderAddForm = () => {
     const form = $('addForm');
+    const accountSelect = $('accountSelect');
     if (!form) return;
+    
+    // 渲染账户选择器
+    if (accountSelect) {
+      accountSelect.innerHTML = state.accounts.map(acc => `
+        <option value="${acc.id}" ${acc.id === addTargetAccount ? 'selected' : ''}>${acc.name}</option>
+      `).join('');
+      accountSelect.onchange = () => { addTargetAccount = accountSelect.value; };
+    }
     
     form.innerHTML = addFormItems.map((item, i) => `
       <div class="add-form-item" data-index="${i}">
         ${addFormItems.length > 1 ? `<button class="add-form-close" data-index="${i}">×</button>` : ''}
         <div class="add-form-row">
-          <label class="add-form-label">基金名称</label>
-          <input type="text" class="add-form-input fund-search-input" 
+          <label class="add-form-label">基金代码</label>
+          <input type="text" class="add-form-input code-input" 
                  data-index="${i}" 
-                 placeholder="请选择基金代码或名称" 
-                 value="${item.name || ''}" readonly>
+                 placeholder="输入6位基金代码或点击搜索" 
+                 value="${item.code || ''}"
+                 maxlength="6">
+          <button class="search-fund-btn" data-index="${i}">搜索</button>
         </div>
+        ${item.name ? `<div class="add-form-fund-name">${item.name}</div>` : ''}
         <div class="add-form-row">
           <label class="add-form-label">持有金额</label>
           <input type="number" class="add-form-input amount-input" 
                  data-index="${i}" 
-                 placeholder="请输入该基金的持有金额" 
+                 placeholder="请输入持有金额" 
                  value="${item.amount || ''}" inputmode="decimal">
         </div>
         <div class="add-form-row">
           <label class="add-form-label">持有收益</label>
           <input type="number" class="add-form-input profit-input" 
                  data-index="${i}" 
-                 placeholder="请输入该基金的持有收益" 
+                 placeholder="请输入持有收益（可选）" 
                  value="${item.profit || ''}" inputmode="decimal">
-        </div>
-        <div class="add-form-toggle">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M18 15l-6-6-6 6"/>
-          </svg>
-          收起
         </div>
       </div>
     `).join('');
     
     updateSubmitBtn();
     
-    // 绑定事件
     form.querySelectorAll('.add-form-close').forEach(btn => {
       btn.onclick = () => {
         const idx = parseInt(btn.dataset.index);
@@ -899,10 +953,31 @@
       };
     });
     
-    form.querySelectorAll('.fund-search-input').forEach(input => {
-      input.onclick = () => {
+    form.querySelectorAll('.code-input').forEach(input => {
+      input.oninput = async () => {
         const idx = parseInt(input.dataset.index);
-        openFundPicker(idx);
+        addFormItems[idx].code = input.value;
+        
+        // 自动搜索基金名称
+        if (input.value.length === 6) {
+          const resp = await api(`${API}?module=fund`, { action: 'info', code: input.value });
+          if (resp.success) {
+            addFormItems[idx].name = resp.data.name;
+            renderAddForm();
+          }
+        }
+        updateSubmitBtn();
+      };
+    });
+    
+    form.querySelectorAll('.search-fund-btn').forEach(btn => {
+      btn.onclick = () => {
+        const idx = parseInt(btn.dataset.index);
+        openSearchModal((code, name) => {
+          addFormItems[idx].code = code;
+          addFormItems[idx].name = name;
+          renderAddForm();
+        });
       };
     });
     
@@ -919,25 +994,9 @@
     });
   };
 
-  const openFundPicker = (index) => {
-    // 简单实现：直接打开搜索弹层，选中后回填
-    openSearchModal();
-    
-    // 修改搜索结果点击行为
-    const originalHandler = (code, name) => {
-      addFormItems[index].code = code;
-      addFormItems[index].name = name;
-      closeSearchModal();
-      renderAddForm();
-    };
-    
-    // 临时存储
-    window._fundPickerCallback = originalHandler;
-  };
-
   const updateSubmitBtn = () => {
     const validCount = addFormItems.filter(item => 
-      item.code && item.amount && parseFloat(item.amount) > 0
+      item.code && item.code.length === 6 && item.amount && parseFloat(item.amount) > 0
     ).length;
     
     const btn = $('submitBtn');
@@ -949,7 +1008,7 @@
 
   const submitAddForm = () => {
     const validItems = addFormItems.filter(item => 
-      item.code && item.amount && parseFloat(item.amount) > 0
+      item.code && item.code.length === 6 && item.amount && parseFloat(item.amount) > 0
     );
     
     if (validItems.length === 0) {
@@ -966,18 +1025,14 @@
       if (existing) {
         existing.amount = parseFloat(item.amount);
         existing.profit = parseFloat(item.profit) || 0;
+        existing.name = item.name || existing.name;
       } else {
         state.holdings[addTargetAccount].push({
           code: item.code,
-          name: item.name,
+          name: item.name || item.code,
           amount: parseFloat(item.amount),
           profit: parseFloat(item.profit) || 0
         });
-      }
-      
-      // 同步到自选
-      if ($('syncWatch')?.checked) {
-        addToWatchlist(item.code, item.name);
       }
     });
     
@@ -1004,15 +1059,10 @@
     if (!resp.success) {
       page.innerHTML = `
         <div class="detail-header">
-          <button class="detail-back" id="detailBack">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M15 18l-6-6 6-6"/>
-            </svg>
-          </button>
+          <button class="detail-back" id="detailBack">←</button>
           <div class="detail-title-wrap">
             <div class="detail-title">${code}</div>
           </div>
-          <div style="width:40px"></div>
         </div>
         <div class="empty" style="padding-top:100px">
           <div class="empty-icon">❌</div>
@@ -1025,116 +1075,120 @@
     
     const fund = resp.data;
     const isWatched = state.watchlist.some(w => w.code === fund.code);
+    const isHolding = Object.values(state.holdings).some(list => list.some(h => h.code === fund.code));
     
     page.innerHTML = `
       <div class="detail-header">
-        <button class="detail-back" id="detailBack">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M15 18l-6-6 6-6"/>
-          </svg>
-        </button>
-        <button class="detail-nav">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M15 18l-6-6 6-6"/>
-          </svg>
-        </button>
+        <button class="detail-back" id="detailBack">←</button>
         <div class="detail-title-wrap">
           <div class="detail-title">${fund.name || code}</div>
           <div class="detail-code">${fund.code}</div>
         </div>
-        <button class="detail-nav">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M9 18l6-6-6-6"/>
-          </svg>
-        </button>
-        <button class="detail-search">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
-          </svg>
-        </button>
       </div>
       
       <div class="detail-content">
         <div class="detail-valuation">
-          <div class="valuation-row">
-            <div>
-              <span class="valuation-label">当日涨幅</span>
-              <span class="valuation-tag">估</span>
-            </div>
-            <div class="valuation-year">
-              <div class="valuation-year-label">近1年</div>
-              <div class="valuation-year-value ${cls(fund.estimate_change)}">+8.29%</div>
-            </div>
+          <div class="valuation-main">
+            <div class="valuation-label">当日涨幅（估）</div>
+            <div class="valuation-value ${cls(fund.estimate_change)}">${sign(parseFloat(fund.estimate_change))}${fund.estimate_change}%</div>
           </div>
-          
-          <div class="valuation-chart">日内走势图</div>
-          
-          <div class="valuation-estimate">
-            <span class="estimate-date">日期 ${new Date().toLocaleDateString('zh-CN', {month:'2-digit',day:'2-digit'})}</span>
-            <span class="estimate-label">估算涨幅</span>
-            <span class="estimate-value ${cls(fund.estimate_change)}">${sign(parseFloat(fund.estimate_change))}${fund.estimate_change}%</span>
+          <div class="valuation-info">
+            <div class="valuation-item">
+              <div class="valuation-item-label">近1年涨幅</div>
+              <div class="valuation-item-value ${cls(fund.year_change)}">${fund.year_change ? sign(parseFloat(fund.year_change)) + fund.year_change + '%' : '--'}</div>
+            </div>
+            <div class="valuation-item">
+              <div class="valuation-item-label">最新净值</div>
+              <div class="valuation-item-value">${fund.nav || '--'}</div>
+            </div>
+            <div class="valuation-item">
+              <div class="valuation-item-label">估算时间</div>
+              <div class="valuation-item-value">${fund.estimate_time || '--'}</div>
+            </div>
           </div>
         </div>
         
-        <div class="detail-sector">
-          <div class="sector-link">
-            <span class="sector-link-name">关联板块：绿色电力</span>
-            <span class="sector-link-change rise">+0.33%</span>
+        ${fund.sectors && fund.sectors.length > 0 ? `
+          <div class="detail-sectors">
+            <div class="detail-section-title">关联板块</div>
+            <div class="sector-tags">
+              ${fund.sectors.map(s => `
+                <span class="sector-tag" data-code="${s.code}" data-name="${s.name}">${s.name}</span>
+              `).join('')}
+            </div>
           </div>
-          <span class="sector-more">10只同类基金 ›</span>
-        </div>
+        ` : ''}
         
         <div class="detail-stocks">
-          <div class="stocks-header">
-            <span class="stocks-title">基金重仓股</span>
-            <span class="stocks-more">更多 ›</span>
-          </div>
-          <div class="stocks-table-header">
-            <span class="stocks-col-name">股票名称</span>
-            <span class="stocks-col">涨幅</span>
-            <span class="stocks-col">持仓占比</span>
-            <span class="stocks-col">较上期占比</span>
-          </div>
-          ${(fund.stocks || []).slice(0, 5).map(s => `
-            <div class="stock-item">
-              <div class="stock-info">
-                <div class="stock-name">${s.name}</div>
-                <div class="stock-code">${s.code}</div>
-              </div>
-              <div class="stock-col ${cls(0)}">+0.35%</div>
-              <div class="stock-col">${s.ratio || '--'}</div>
-              <div class="stock-col stock-change-up">1.17%↑</div>
+          <div class="detail-section-title">基金重仓股</div>
+          ${fund.stocks && fund.stocks.length > 0 ? `
+            <div class="stocks-list">
+              ${fund.stocks.map((s, i) => `
+                <div class="stock-item">
+                  <span class="stock-rank">${i + 1}</span>
+                  <div class="stock-info">
+                    <div class="stock-name">${s.name}</div>
+                    <div class="stock-code">${s.code}</div>
+                  </div>
+                  <div class="stock-ratio">${s.ratio}</div>
+                </div>
+              `).join('')}
             </div>
-          `).join('') || '<div class="empty"><div class="empty-text">暂无重仓股数据</div></div>'}
+          ` : `
+            <div class="empty-inline">暂无重仓股数据</div>
+          `}
         </div>
       </div>
       
       <div class="detail-actions">
-        <button class="detail-action" id="editHoldingBtn">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
-            <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
-          </svg>
-          修改持仓
+        <button class="detail-action primary" id="editHoldingBtn">
+          ${isHolding ? '修改持仓' : '添加持有'}
         </button>
-        <button class="detail-action" id="toggleWatchBtn">
-          <svg viewBox="0 0 24 24" fill="${isWatched ? 'var(--primary)' : 'none'}" stroke="currentColor" stroke-width="2">
-            <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/>
-          </svg>
+        <button class="detail-action ${isWatched ? 'danger' : ''}" id="toggleWatchBtn">
           ${isWatched ? '删自选' : '加自选'}
         </button>
       </div>
     `;
     
-    // 绑定事件
     $('detailBack').onclick = closeDetailModal;
+    
+    // 关联板块点击
+    page.querySelectorAll('.sector-tag').forEach(tag => {
+      tag.onclick = () => {
+        closeDetailModal();
+        openSectorFundsModal(tag.dataset.code, tag.dataset.name);
+      };
+    });
+    
     $('toggleWatchBtn').onclick = () => {
       if (isWatched) {
         removeFromWatchlist(fund.code);
       } else {
         addToWatchlist(fund.code, fund.name);
       }
-      openFundDetail(code); // 刷新
+      openFundDetail(code);
+    };
+    
+    $('editHoldingBtn').onclick = () => {
+      closeDetailModal();
+      // 打开新增持有弹层，预填基金信息
+      const defaultAccount = state.accounts[0]?.id;
+      addTargetAccount = defaultAccount;
+      addFormItems = [{ code: fund.code, name: fund.name, amount: '', profit: '' }];
+      
+      // 如果已持有，找到持有信息
+      for (const [accId, list] of Object.entries(state.holdings)) {
+        const existing = list.find(h => h.code === fund.code);
+        if (existing) {
+          addTargetAccount = accId;
+          addFormItems[0].amount = existing.amount;
+          addFormItems[0].profit = existing.profit;
+          break;
+        }
+      }
+      
+      renderAddForm();
+      $('addModal')?.classList.add('active');
     };
   };
 
@@ -1153,13 +1207,9 @@
     
     modal.classList.add('active');
     page.innerHTML = `
-      <div class="sector-header">
-        <button class="back-btn" id="sectorBack">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M15 18l-6-6 6-6"/>
-          </svg>
-        </button>
-        <h1 class="sector-title">板块总览</h1>
+      <div class="modal-header">
+        <button class="back-btn" id="sectorBack">←</button>
+        <h1 class="modal-title">板块总览</h1>
       </div>
       <div class="sector-content">
         <div class="loading"><div class="spinner"></div></div>
@@ -1172,30 +1222,154 @@
     const content = page.querySelector('.sector-content');
     
     if (resp.success) {
+      // 排序
+      const sortField = state.sectorSort.field;
+      const sortAsc = state.sectorSort.asc;
+      const sectors = [...resp.data];
+      
+      sectors.sort((a, b) => {
+        let va, vb;
+        if (sortField === 'change') {
+          va = parseFloat(a.change_percent.replace('%', '').replace('+', ''));
+          vb = parseFloat(b.change_percent.replace('%', '').replace('+', ''));
+        } else {
+          va = a.streak_days;
+          vb = b.streak_days;
+        }
+        return sortAsc ? va - vb : vb - va;
+      });
+      
+      const changeActive = sortField === 'change';
+      const streakActive = sortField === 'streak';
+      
       content.innerHTML = `
         <div class="sector-table-header">
           <span class="sector-col-name">板块名称</span>
-          <span class="sector-col">涨跌幅 ▼</span>
-          <span class="sector-col">连涨天数 ▽</span>
-          <span class="sector-col">持有排名 ▽</span>
+          <span class="sector-col sortable ${changeActive ? 'active' : ''}" data-sort="change">
+            当日涨幅 ${changeActive ? (sortAsc ? '↑' : '↓') : ''}
+          </span>
+          <span class="sector-col sortable ${streakActive ? 'active' : ''}" data-sort="streak">
+            连涨天数 ${streakActive ? (sortAsc ? '↑' : '↓') : ''}
+          </span>
         </div>
-        ${resp.data.map((s, i) => `
-          <div class="sector-item">
-            <div class="sector-info">
-              <div class="sector-name">${s.name}</div>
-              <div class="sector-count">${s.funds}只基金</div>
+        <div class="sector-list">
+          ${sectors.map(s => `
+            <div class="sector-item" data-code="${s.code}" data-name="${s.name}">
+              <div class="sector-info">
+                <div class="sector-name">${s.name}</div>
+              </div>
+              <div class="sector-col-value ${cls(s.change_percent)}">${s.change_percent}</div>
+              <div class="sector-col-value ${s.streak_days >= 0 ? 'rise' : 'fall'}">${s.streak_days}天</div>
             </div>
-            <div class="sector-col-value ${cls(s.change_percent)}">${s.change_percent}</div>
-            <div class="sector-col-value ${s.streak_days >= 0 ? 'rise' : 'fall'}">${s.streak_days}天</div>
-            <div class="sector-col-value">${i + 1}</div>
-          </div>
-        `).join('')}
+          `).join('')}
+        </div>
+      `;
+      
+      // 排序点击
+      content.querySelectorAll('.sortable').forEach(el => {
+        el.onclick = () => {
+          const field = el.dataset.sort;
+          if (state.sectorSort.field === field) {
+            state.sectorSort.asc = !state.sectorSort.asc;
+          } else {
+            state.sectorSort.field = field;
+            state.sectorSort.asc = false;
+          }
+          openSectorModal();
+        };
+      });
+      
+      // 板块点击
+      content.querySelectorAll('.sector-item').forEach(item => {
+        item.onclick = () => {
+          closeSectorModal();
+          openSectorFundsModal(item.dataset.code, item.dataset.name);
+        };
+      });
+    }
+    if (!resp.success && content) {
+      content.innerHTML = `
+        <div class="empty">
+          <div class="empty-icon">📊</div>
+          <div class="empty-text">${resp.message || '板块数据获取失败'}</div>
+        </div>
       `;
     }
   };
 
   const closeSectorModal = () => {
     $('sectorModal')?.classList.remove('active');
+  };
+
+  // ==========================================
+  // 弹层 - 板块基金
+  // ==========================================
+  
+  const openSectorFundsModal = async (sectorCode, sectorName) => {
+    const modal = $('sectorFundsModal');
+    const page = $('sectorFundsPage');
+    if (!modal || !page) return;
+    
+    modal.classList.add('active');
+    page.innerHTML = `
+      <div class="modal-header">
+        <button class="back-btn" id="sectorFundsBack">←</button>
+        <h1 class="modal-title">${sectorName}</h1>
+      </div>
+      <div class="sector-funds-content">
+        <div class="loading"><div class="spinner"></div></div>
+      </div>
+    `;
+    
+    $('sectorFundsBack').onclick = closeSectorFundsModal;
+    
+    const resp = await api(`${API}?module=sector`, { action: 'funds', code: sectorCode, name: sectorName });
+    const content = page.querySelector('.sector-funds-content');
+    
+    if (resp.success && resp.data.length > 0) {
+      content.innerHTML = `
+        <div class="list-header">
+          <div class="list-header-col list-header-col-name">基金</div>
+          <div class="list-header-col">当日涨幅</div>
+        </div>
+        <div class="fund-list">
+          ${resp.data.map(f => `
+            <div class="fund-item" data-code="${f.code}">
+              <div class="fund-info">
+                <div class="fund-name">${f.name}</div>
+                <div class="fund-meta">${f.code}</div>
+              </div>
+              <div class="fund-change ${cls(f.change)}">${f.change ? sign(parseFloat(f.change)) + f.change + '%' : '--'}</div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+      
+      content.querySelectorAll('.fund-item').forEach(item => {
+        item.onclick = () => {
+          closeSectorFundsModal();
+          openFundDetail(item.dataset.code);
+        };
+      });
+    } else if (!resp.success) {
+      content.innerHTML = `
+        <div class="empty">
+          <div class="empty-icon">📊</div>
+          <div class="empty-text">${resp.message || '板块基金获取失败'}</div>
+        </div>
+      `;
+    } else {
+      content.innerHTML = `
+        <div class="empty">
+          <div class="empty-icon">📊</div>
+          <div class="empty-text">暂无该板块基金数据</div>
+        </div>
+      `;
+    }
+  };
+
+  const closeSectorFundsModal = () => {
+    $('sectorFundsModal')?.classList.remove('active');
   };
 
   // ==========================================
@@ -1206,6 +1380,7 @@
     if (!code || state.watchlist.some(w => w.code === code)) return;
     state.watchlist.unshift({ code, name });
     saveWatchlist();
+    toast('已添加到自选');
   };
 
   const removeFromWatchlist = (code) => {
@@ -1221,24 +1396,20 @@
   const switchPage = (pageId) => {
     state.currentPage = pageId;
     
-    // 更新Tab状态
     $$('.tab').forEach(tab => {
       tab.classList.toggle('active', tab.dataset.tab === pageId);
     });
     
-    // 更新页面显示
     $$('.page').forEach(page => {
       page.classList.toggle('active', page.dataset.page === pageId);
     });
     
-    // 更新Header
     if (pageId === 'hold') {
       renderHoldTabs();
     } else {
       $('headerTabs').innerHTML = '';
     }
     
-    // 渲染页面内容
     switch (pageId) {
       case 'hold':
         renderHoldPage();
@@ -1254,7 +1425,6 @@
         break;
     }
     
-    // 显示/隐藏指数栏
     $('indexBar').style.display = (pageId === 'hold' || pageId === 'watch') ? 'flex' : 'none';
   };
 
@@ -1263,19 +1433,15 @@
   // ==========================================
   
   const init = () => {
-    // 加载状态
     loadState();
     
-    // 绑定TabBar
     $$('.tab').forEach(tab => {
       tab.onclick = () => switchPage(tab.dataset.tab);
     });
     
-    // 绑定搜索按钮
-    $('searchBtn')?.addEventListener('click', openSearchModal);
+    $('searchBtn')?.addEventListener('click', () => openSearchModal());
     $('searchCancel')?.addEventListener('click', closeSearchModal);
     
-    // 绑定搜索输入
     $('searchInput')?.addEventListener('input', (e) => {
       const val = e.target.value.trim();
       $('searchClear').classList.toggle('show', val.length > 0);
@@ -1294,7 +1460,6 @@
       renderSearchContent();
     });
     
-    // 绑定新增弹层
     $('addBack')?.addEventListener('click', closeAddModal);
     $('addMore')?.addEventListener('click', () => {
       addFormItems.push({ code: '', name: '', amount: '', profit: '' });
@@ -1302,23 +1467,17 @@
     });
     $('submitBtn')?.addEventListener('click', submitAddForm);
     
-    // 禁止双指缩放
     document.addEventListener('gesturestart', e => e.preventDefault());
     document.addEventListener('gesturechange', e => e.preventDefault());
     
-    // 注册ServiceWorker
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
     
-    // 初始渲染
     switchPage('hold');
-    
-    // 加载指数
     loadIndices();
   };
 
-  // 启动
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {

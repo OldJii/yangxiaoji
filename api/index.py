@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 养小基 API - 统一入口
-通过 module 参数路由到不同的处理函数
+完整的基金、板块、市场和资讯数据
 """
 
 import json
 import re
 import time
+import random
 from urllib.parse import parse_qs, urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import BaseHTTPRequestHandler
@@ -27,13 +28,14 @@ SESSION.headers.update({
 })
 
 CACHE = {}
-CACHE_TTL = 30
+CACHE_TTL = 60  # 默认缓存60秒
+EASTMONEY_UT = "fa5fd1943c7b386f172d6893dbfba10b"
 
 
-def get_cache(key):
+def get_cache(key, ttl=None):
     if key in CACHE:
         data, ts = CACHE[key]
-        if time.time() - ts < CACHE_TTL:
+        if time.time() - ts < (ttl or CACHE_TTL):
             return data
         del CACHE[key]
     return None
@@ -43,9 +45,84 @@ def set_cache(key, data, ttl=None):
     CACHE[key] = (data, time.time())
     # 清理过期缓存
     now = time.time()
-    expired = [k for k, (_, ts) in list(CACHE.items()) if now - ts > (ttl or CACHE_TTL) * 10]
-    for k in expired:
-        del CACHE[k]
+    expired = [k for k, (_, ts) in list(CACHE.items()) if now - ts > CACHE_TTL * 5]
+    for k in expired[:10]:  # 每次最多清理10个
+        CACHE.pop(k, None)
+
+
+# ==========================================
+# 板块配置 - 完整的板块列表
+# ==========================================
+
+SECTOR_LIST = [
+    # 科技
+    {"name": "人工智能", "code": "BK000217", "category": "科技"},
+    {"name": "半导体", "code": "BK000054", "category": "科技"},
+    {"name": "云计算", "code": "BK000266", "category": "科技"},
+    {"name": "5G概念", "code": "BK000291", "category": "科技"},
+    {"name": "光模块", "code": "BK000651", "category": "科技"},
+    {"name": "算力", "code": "BK000601", "category": "科技"},
+    {"name": "生成式AI", "code": "BK000369", "category": "科技"},
+    {"name": "消费电子", "code": "BK000089", "category": "科技"},
+    # 新能源
+    {"name": "新能源汽车", "code": "BK000225", "category": "新能源"},
+    {"name": "光伏", "code": "BK000146", "category": "新能源"},
+    {"name": "锂电池", "code": "BK000295", "category": "新能源"},
+    {"name": "储能", "code": "BK000230", "category": "新能源"},
+    {"name": "氢能源", "code": "BK000227", "category": "新能源"},
+    {"name": "风电", "code": "BK000147", "category": "新能源"},
+    {"name": "绿色电力", "code": "BK1036", "category": "新能源"},
+    {"name": "电网设备", "code": "BK0920", "category": "新能源"},
+    # 医药健康
+    {"name": "医药", "code": "BK000090", "category": "医药健康"},
+    {"name": "医疗器械", "code": "BK000095", "category": "医药健康"},
+    {"name": "创新药", "code": "BK000315", "category": "医药健康"},
+    {"name": "中药", "code": "BK000091", "category": "医药健康"},
+    # 金融
+    {"name": "银行", "code": "BK000121", "category": "金融"},
+    {"name": "证券", "code": "BK000128", "category": "金融"},
+    {"name": "保险", "code": "BK000127", "category": "金融"},
+    # 消费
+    {"name": "食品饮料", "code": "BK000074", "category": "消费"},
+    {"name": "白酒", "code": "BK000076", "category": "消费"},
+    {"name": "家用电器", "code": "BK000066", "category": "消费"},
+    {"name": "汽车整车", "code": "BK000069", "category": "消费"},
+    # 工业制造
+    {"name": "机器人", "code": "BK000234", "category": "工业制造"},
+    {"name": "人形机器人", "code": "BK000581", "category": "工业制造"},
+    {"name": "自动驾驶", "code": "BK000279", "category": "工业制造"},
+    {"name": "智能驾驶", "code": "BK000461", "category": "工业制造"},
+    {"name": "国防军工", "code": "BK000156", "category": "工业制造"},
+    {"name": "低空经济", "code": "BK000521", "category": "工业制造"},
+    {"name": "商业航天", "code": "BK1132", "category": "工业制造"},
+    # 周期资源
+    {"name": "煤炭", "code": "BK000177", "category": "周期资源"},
+    {"name": "钢铁", "code": "BK000043", "category": "周期资源"},
+    {"name": "有色金属", "code": "BK000047", "category": "周期资源"},
+    {"name": "贵金属", "code": "BK000050", "category": "周期资源"},
+    {"name": "房地产", "code": "BK000105", "category": "周期资源"},
+    # 其他
+    {"name": "可控核聚变", "code": "BK1133", "category": "其他"},
+    {"name": "交通运输", "code": "BK000112", "category": "其他"},
+]
+
+SECTOR_ALIAS_MAP = {
+    "酿酒": "BK000076",
+    "光伏设备": "BK000146",
+    "电网设备": "BK0920",
+}
+
+
+def _map_sector_to_theme_code(sector_name):
+    if not sector_name:
+        return ""
+    for item in SECTOR_LIST:
+        if item["name"] in sector_name:
+            return item["code"]
+    for key, code in SECTOR_ALIAS_MAP.items():
+        if key in sector_name:
+            return code
+    return ""
 
 
 # ==========================================
@@ -68,10 +145,11 @@ def fund_search(keyword):
         results = []
         if data.get("Datas"):
             for item in data["Datas"]:
+                fund_base = item.get("FundBaseInfo") or {}
                 results.append({
                     "code": item.get("CODE", ""),
                     "name": item.get("NAME", ""),
-                    "type": item.get("FundBaseInfo", {}).get("FTYPE", "") if item.get("FundBaseInfo") else "",
+                    "type": fund_base.get("FTYPE", ""),
                     "category": item.get("CATEGORYDESC", "")
                 })
         
@@ -85,7 +163,7 @@ def fund_search(keyword):
 def fund_info(code):
     """获取单只基金信息"""
     cache_key = f"info:{code}"
-    cached = get_cache(cache_key)
+    cached = get_cache(cache_key, ttl=30)
     if cached:
         return cached
     
@@ -111,40 +189,87 @@ def fund_info(code):
                 "estimate_time": data.get("gztime", ""),
             }
         }
-        set_cache(cache_key, result)
+        set_cache(cache_key, result, ttl=30)
         return result
     except Exception as e:
         return {"success": False, "message": f"获取失败: {str(e)}"}
 
 
 def fund_detail(code):
-    """获取基金详细信息"""
-    info = fund_info(code)
-    if not info.get("success"):
-        return info
+    """获取基金详细信息，包含重仓股"""
+    info_result = fund_info(code)
+    if not info_result.get("success"):
+        return info_result
+    
+    fund_data = info_result["data"].copy()
     
     try:
-        stocks = []
+        # 获取重仓股
         stocks_url = f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={code}&topline=10"
-        stocks_resp = SESSION.get(stocks_url, timeout=5, verify=False)
+        stocks_resp = SESSION.get(stocks_url, timeout=8, verify=False,
+            headers={"Referer": "https://fundf10.eastmoney.com/"})
         
-        stock_pattern = r'<td[^>]*>(\d{6})</td>\s*<td[^>]*><a[^>]*>([^<]+)</a></td>\s*<td[^>]*>([^<]*)</td>'
-        for match in re.finditer(stock_pattern, stocks_resp.text):
+        stocks = []
+        # 尝试多种解析方式
+        # 方式1: HTML表格解析
+        table_pattern = r'<tr[^>]*>.*?<td[^>]*>(\d+)</td>.*?<td[^>]*>(\d{6})</td>.*?<td[^>]*><a[^>]*>([^<]+)</a></td>.*?<td[^>]*>([^<]*)</td>'
+        for match in re.finditer(table_pattern, stocks_resp.text, re.DOTALL):
             stocks.append({
-                "code": match.group(1),
-                "name": match.group(2),
-                "ratio": match.group(3)
+                "rank": match.group(1),
+                "code": match.group(2),
+                "name": match.group(3).strip(),
+                "ratio": match.group(4).strip() + "%",
+                "change": ""  # 涨幅需要另外获取
             })
         
-        return {
-            "success": True,
-            "data": {
-                **info["data"],
-                "stocks": stocks[:10]
-            }
-        }
+        # 如果第一种方式没获取到，尝试简化的正则
+        if not stocks:
+            simple_pattern = r'<a[^>]*>(\d{6})</a>.*?<a[^>]*>([^<]+)</a>.*?(\d+\.\d+)%'
+            for match in re.finditer(simple_pattern, stocks_resp.text, re.DOTALL):
+                stocks.append({
+                    "code": match.group(1),
+                    "name": match.group(2).strip(),
+                    "ratio": match.group(3) + "%",
+                    "change": ""
+                })
+        
+        fund_data["stocks"] = stocks[:10]
+        
+        # 获取涨幅数据
+        try:
+            increase_url = "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNPeriodIncrease"
+            params = {"FCODE": code, "deviceid": "mobile", "plat": "Iphone", "version": "6.5.5"}
+            inc_resp = SESSION.get(increase_url, params=params, timeout=5, verify=False)
+            inc_data = inc_resp.json()
+            
+            if inc_data.get("Datas"):
+                for item in inc_data["Datas"]:
+                    if item.get("title") == "1N":  # 近一年
+                        fund_data["year_change"] = item.get("syl", "0")
+                        break
+        except:
+            fund_data["year_change"] = "0"
+        
+        # 获取关联板块
+        try:
+            search_url = "https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx"
+            search_resp = SESSION.get(search_url, params={"m": "1", "key": code}, timeout=5, verify=False)
+            search_data = search_resp.json()
+            
+            if search_data.get("Datas") and search_data["Datas"]:
+                zt_info = search_data["Datas"][0].get("ZTJJInfo", [])
+                if zt_info:
+                    fund_data["sectors"] = [{"name": zt.get("TTYPENAME", ""), "code": zt.get("TTYPE", "")} for zt in zt_info[:3]]
+        except:
+            fund_data["sectors"] = []
+        
+        return {"success": True, "data": fund_data}
     except Exception as e:
-        return {"success": False, "message": f"获取详情失败: {str(e)}"}
+        # 即使获取重仓股失败，也返回基金基本信息
+        fund_data["stocks"] = []
+        fund_data["year_change"] = "0"
+        fund_data["sectors"] = []
+        return {"success": True, "data": fund_data}
 
 
 def fund_batch(codes):
@@ -189,7 +314,6 @@ def fund_hot():
         }
         resp = SESSION.get(url, params=params, headers=headers, timeout=10, verify=False)
         
-        # 解析 var rankData = {...} 格式
         text = resp.text
         match = re.search(r'datas:\[(.*?)\]', text)
         if not match:
@@ -221,13 +345,11 @@ def fund_hot():
 def market_indices():
     """获取主要指数"""
     cache_key = "indices"
-    cached = get_cache(cache_key)
+    cached = get_cache(cache_key, ttl=30)
     if cached:
         return cached
     
-    # 尝试多个数据源
     try:
-        # 方案1: 使用东方财富行情API
         url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
         params = {
             "fltt": "2",
@@ -251,12 +373,12 @@ def market_indices():
         
         if indices:
             result = {"success": True, "data": indices}
-            set_cache(cache_key, result, ttl=10)
+            set_cache(cache_key, result, ttl=30)
             return result
-    except Exception:
+    except:
         pass
     
-    # 方案2: 使用腾讯财经API作为备用
+    # 备用方案：腾讯财经
     try:
         url = "https://qt.gtimg.cn/q=sh000001,sz399001,sz399006,sh000300"
         resp = SESSION.get(url, timeout=8, verify=False)
@@ -271,19 +393,16 @@ def market_indices():
                 continue
             parts = line.split('~')
             if len(parts) >= 35:
-                value = parts[3]
-                change = parts[31]
-                change_pct = parts[32]
                 indices.append({
                     "name": names[i] if i < len(names) else parts[1],
-                    "value": value,
-                    "change": change,
-                    "change_percent": f"{change_pct}%"
+                    "value": parts[3],
+                    "change": parts[31],
+                    "change_percent": f"{parts[32]}%"
                 })
         
         if indices:
             result = {"success": True, "data": indices}
-            set_cache(cache_key, result, ttl=10)
+            set_cache(cache_key, result, ttl=30)
             return result
     except Exception as e:
         return {"success": False, "message": f"获取指数失败: {str(e)}"}
@@ -291,108 +410,26 @@ def market_indices():
     return {"success": False, "message": "获取指数失败: 所有数据源不可用"}
 
 
-def market_distribution():
-    """获取基金涨跌分布"""
-    cache_key = "distribution"
-    cached = get_cache(cache_key)
-    if cached:
-        return cached
-    
-    try:
-        url = "https://fundmobapi.eastmoney.com/FundMApi/FundRankNewList.ashx"
-        params = {
-            "fundtype": "0", "sorttype": "SYL_D", "sort": "desc",
-            "pageindex": "0", "pagesize": "10000", "plat": "Iphone"
-        }
-        resp = SESSION.get(url, params=params, timeout=10, verify=False)
-        data = resp.json()
-        
-        distribution = {
-            "lt_neg5": 0, "neg5_neg3": 0, "neg3_neg1": 0, "neg1_0": 0,
-            "zero": 0, "0_1": 0, "1_3": 0, "3_5": 0, "gt_5": 0
-        }
-        
-        up_count = 0
-        down_count = 0
-        
-        for fund in data.get("Datas", []):
-            try:
-                change = float(fund.get("SYL_D", "0") or "0")
-                if change < -5:
-                    distribution["lt_neg5"] += 1
-                    down_count += 1
-                elif change < -3:
-                    distribution["neg5_neg3"] += 1
-                    down_count += 1
-                elif change < -1:
-                    distribution["neg3_neg1"] += 1
-                    down_count += 1
-                elif change < 0:
-                    distribution["neg1_0"] += 1
-                    down_count += 1
-                elif change == 0:
-                    distribution["zero"] += 1
-                elif change < 1:
-                    distribution["0_1"] += 1
-                    up_count += 1
-                elif change < 3:
-                    distribution["1_3"] += 1
-                    up_count += 1
-                elif change < 5:
-                    distribution["3_5"] += 1
-                    up_count += 1
-                else:
-                    distribution["gt_5"] += 1
-                    up_count += 1
-            except (ValueError, TypeError):
-                pass
-        
-        result = {
-            "success": True,
-            "data": {
-                "distribution": distribution,
-                "up_count": up_count,
-                "down_count": down_count,
-                "update_time": time.strftime("%Y-%m-%d %H:%M")
-            }
-        }
-        set_cache(cache_key, result, ttl=10)
-        return result
-    except Exception as e:
-        return {"success": False, "message": f"获取分布失败: {str(e)}"}
-
-
 # ==========================================
 # 板块模块
 # ==========================================
 
-SECTORS = {
-    "电网设备": {"code": "BK0920", "funds": 6},
-    "白酒": {"code": "BK0477", "funds": 19},
-    "银行": {"code": "BK0475", "funds": 12},
-    "可控核聚变": {"code": "BK1133", "funds": 4},
-    "商业航天": {"code": "BK1132", "funds": 23},
-    "光伏": {"code": "BK0478", "funds": 20},
-    "绿色电力": {"code": "BK1036", "funds": 10},
-    "有色金属": {"code": "BK0478", "funds": 16}
-}
-
-
 def sector_list():
     """获取板块列表"""
     cache_key = "sector_list"
-    cached = get_cache(cache_key)
+    cached = get_cache(cache_key, ttl=300)
     if cached:
         return cached
     
     try:
+        # 使用东方财富行业板块API
         url = "https://push2.eastmoney.com/api/qt/clist/get"
         params = {
-            "cb": "", "fid": "f3", "po": "1", "pz": "100", "pn": "1",
+            "cb": "", "fid": "f62", "po": "1", "pz": "100", "pn": "1",
             "np": "1", "fltt": "2", "invt": "2",
-            "ut": "bd1d9ddb04089700cf9c27f6f7426281",
-            "fs": "m:90+t:2",
-            "fields": "f2,f3,f4,f12,f14,f104,f105,f128"
+            "ut": "8dec03ba335b81bf4ebdf7b29ec27d15",
+            "fs": "m:90 t:2",
+            "fields": "f12,f14,f2,f3,f62,f184,f104,f105"
         }
         resp = SESSION.get(url, params=params, timeout=10, verify=False)
         data = resp.json()
@@ -400,53 +437,218 @@ def sector_list():
         sectors = []
         if data.get("data", {}).get("diff"):
             for item in data["data"]["diff"]:
-                sector_name = item.get("f14", "")
-                if sector_name in SECTORS or len(sectors) < 30:
-                    change = item.get("f3", 0)
-                    sectors.append({
-                        "name": sector_name,
-                        "code": item.get("f12", ""),
-                        "change_percent": f"{'+' if change >= 0 else ''}{change}%",
-                        "up_count": item.get("f104", 0),
-                        "down_count": item.get("f105", 0),
-                        "funds": SECTORS.get(sector_name, {}).get("funds", 0)
-                    })
+                change = item.get("f3", 0)
+                if change == "-":
+                    change = 0
+                sectors.append({
+                    "name": item.get("f14", ""),
+                    "code": item.get("f12", ""),
+                    "change_percent": f"{'+' if float(change) >= 0 else ''}{change}%",
+                    "up_count": item.get("f104", 0),
+                    "down_count": item.get("f105", 0),
+                })
         
-        sectors.sort(key=lambda x: float(x["change_percent"].replace("%", "").replace("+", "")), reverse=True)
-        
+        if not sectors:
+            return {"success": False, "message": "板块数据为空"}
+
         result = {"success": True, "data": sectors}
-        set_cache(cache_key, result, ttl=60)
+        set_cache(cache_key, result, ttl=300)
         return result
     except Exception as e:
         return {"success": False, "message": f"获取板块失败: {str(e)}"}
 
 
+def _calc_sector_streak_days(sector_code):
+    """根据最近日K计算板块连涨/连跌天数"""
+    url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    params = {
+        "secid": f"90.{sector_code}",
+        "klt": "101",
+        "fqt": "1",
+        "lmt": "10",
+        "end": "20500101",
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "ut": EASTMONEY_UT
+    }
+    resp = SESSION.get(url, params=params, timeout=10, verify=False)
+    data = resp.json()
+    if not data.get("data", {}).get("klines"):
+        return 0
+
+    klines = data["data"]["klines"]
+    if len(klines) < 2:
+        return 0
+
+    closes = []
+    for item in klines:
+        parts = item.split(",")
+        if len(parts) >= 3:
+            try:
+                closes.append(float(parts[2]))
+            except ValueError:
+                continue
+
+    if len(closes) < 2:
+        return 0
+
+    streak = 0
+    last_sign = 0
+    for i in range(len(closes) - 1, 0, -1):
+        diff = closes[i] - closes[i - 1]
+        sign = 1 if diff > 0 else -1 if diff < 0 else 0
+        if sign == 0:
+            break
+        if last_sign == 0:
+            last_sign = sign
+            streak = 1 if sign > 0 else -1
+            continue
+        if sign == last_sign:
+            streak = streak + 1 if sign > 0 else streak - 1
+        else:
+            break
+    return streak
+
+
 def sector_streak():
-    """获取板块连涨/连跌"""
+    """获取板块连涨/连跌数据"""
     cache_key = "sector_streak"
-    cached = get_cache(cache_key)
+    cached = get_cache(cache_key, ttl=300)
     if cached:
         return cached
     
-    sectors = [
-        {"name": "电网设备", "funds": 6, "change_percent": "+1.60%", "streak_days": -2},
-        {"name": "白酒", "funds": 19, "change_percent": "+1.26%", "streak_days": -1},
-        {"name": "银行", "funds": 12, "change_percent": "+0.63%", "streak_days": -1},
-        {"name": "可控核聚变", "funds": 4, "change_percent": "+0.61%", "streak_days": -3},
-        {"name": "商业航天", "funds": 23, "change_percent": "+0.54%", "streak_days": -3},
-        {"name": "光伏", "funds": 20, "change_percent": "+0.49%", "streak_days": -3},
-        {"name": "绿色电力", "funds": 10, "change_percent": "+0.33%", "streak_days": -5},
-        {"name": "交通运输", "funds": 8, "change_percent": "+0.17%", "streak_days": -1},
-        {"name": "家用电器", "funds": 7, "change_percent": "+0.11%", "streak_days": -1},
-        {"name": "储能", "funds": 14, "change_percent": "+0.02%", "streak_days": -5},
-        {"name": "证券保险", "funds": 22, "change_percent": "0.00%", "streak_days": -1},
-        {"name": "消费", "funds": 40, "change_percent": "-0.04%", "streak_days": -1},
-        {"name": "债基", "funds": 52, "change_percent": "-0.07%", "streak_days": -2},
-    ]
+    try:
+        list_result = sector_list()
+        if not list_result.get("success"):
+            return list_result
+        
+        sectors = list_result["data"]
+        results = []
+
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            futures = {executor.submit(_calc_sector_streak_days, s["code"]): s for s in sectors}
+            for future in as_completed(futures):
+                sector = futures[future]
+                try:
+                    streak = future.result()
+                except Exception:
+                    streak = 0
+                sector = sector.copy()
+                sector["streak_days"] = streak
+                results.append(sector)
+
+        code_order = {s["code"]: i for i, s in enumerate(sectors)}
+        results.sort(key=lambda x: code_order.get(x.get("code", ""), 999))
+
+        result = {"success": True, "data": results}
+        set_cache(cache_key, result, ttl=300)
+        return result
+    except Exception as e:
+        return {"success": False, "message": f"获取板块数据失败: {str(e)}"}
+
+
+def _fetch_sector_funds_by_code(sector_code):
+    url = "https://fund.eastmoney.com/data/FundGuideapi.aspx"
+    params = {
+        "dt": "4", "sd": "", "ed": "", "tp": sector_code,
+        "sc": "1n", "st": "desc", "pi": "1", "pn": "200",
+        "zf": "diy", "sh": "list", "rnd": str(random.random())
+    }
+    headers = {
+        "Referer": "https://fund.eastmoney.com/",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+    }
+    resp = SESSION.get(url, params=params, headers=headers, timeout=15, verify=False)
+    text = resp.text.replace("var rankData =", "").strip()
+    if text.endswith(";"):
+        text = text[:-1]
+    data = json.loads(text)
+    funds = []
+    for item in data.get("datas", []):
+        parts = item.split(",")
+        if len(parts) >= 20:
+            funds.append({
+                "code": parts[0],
+                "name": parts[1],
+                "type": parts[3] if len(parts) > 3 else "",
+                "change": parts[16] if len(parts) > 16 and parts[16] else "0",
+                "year_change": parts[9] if len(parts) > 9 else "0"
+            })
+    return funds
+
+
+def sector_funds(sector_code, sector_name=""):
+    """获取板块内基金列表"""
+    cache_key = f"sector_funds:{sector_code}"
+    cached = get_cache(cache_key, ttl=300)
+    if cached:
+        return cached
     
-    result = {"success": True, "data": sectors}
-    set_cache(cache_key, result, ttl=60)
-    return result
+    try:
+        funds = _fetch_sector_funds_by_code(sector_code)
+        if not funds and sector_name:
+            theme_code = _map_sector_to_theme_code(sector_name)
+            if theme_code and theme_code != sector_code:
+                funds = _fetch_sector_funds_by_code(theme_code)
+        
+        if not funds:
+            return {"success": False, "message": "板块基金数据为空"}
+
+        result = {"success": True, "data": funds, "sector_name": sector_name}
+        set_cache(cache_key, result, ttl=300)
+        return result
+    except Exception as e:
+        return {"success": False, "message": f"获取板块基金失败: {str(e)}"}
+
+
+# ==========================================
+# 资讯模块
+# ==========================================
+
+def news_list():
+    """获取基金相关资讯"""
+    cache_key = "news_list"
+    cached = get_cache(cache_key, ttl=300)
+    if cached:
+        return cached
+    
+    # 使用新浪财经滚动资讯
+    try:
+        url = "https://feed.mix.sina.com.cn/api/roll/get"
+        params = {"pageid": "153", "lid": "2517", "num": "20", "page": "1"}
+        resp = SESSION.get(url, params=params, timeout=10, verify=False)
+        data = resp.json()
+        
+        news = []
+        items = data.get("result", {}).get("data", [])
+        for item in items[:20]:
+            title = item.get("title", "")
+            summary = item.get("summary") or item.get("intro") or item.get("wapsummary") or ""
+            source = item.get("media_name", "新浪财经")
+            ctime = item.get("ctime") or item.get("intime")
+            try:
+                ts = int(ctime)
+                time_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+            except Exception:
+                time_str = ""
+            url = item.get("url") or item.get("wapurl") or ""
+            if title:
+                news.append({
+                    "title": title,
+                    "summary": summary,
+                    "source": source,
+                    "time": time_str,
+                    "url": url
+                })
+        
+        if news:
+            result = {"success": True, "data": news}
+            set_cache(cache_key, result, ttl=300)
+            return result
+    except Exception:
+        pass
+
+    return {"success": False, "message": "资讯数据获取失败"}
 
 
 # ==========================================
@@ -493,8 +695,6 @@ def handle_request(params):
     if module == 'market':
         if action == 'indices':
             return market_indices()
-        elif action == 'distribution':
-            return market_distribution()
     
     # 板块模块
     if module == 'sector':
@@ -502,6 +702,17 @@ def handle_request(params):
             return sector_list()
         elif action == 'streak':
             return sector_streak()
+        elif action == 'funds':
+            code = params.get('code', [''])[0]
+            name = params.get('name', [''])[0]
+            if code:
+                return sector_funds(code, name)
+            return {"success": False, "message": "请提供板块代码"}
+    
+    # 资讯模块
+    if module == 'news':
+        if action == 'list':
+            return news_list()
     
     return {"success": False, "message": f"未知操作: module={module}, action={action}"}
 

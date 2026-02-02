@@ -1760,3 +1760,682 @@ body {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+/* ==========================================
+   新增样式
+   ========================================== */
+
+/* 菜单按钮 */
+.menu-btn {
+  font-size: 18px !important;
+  padding: 0 8px !important;
+}
+
+/* 账户管理页 */
+.account-page {
+  height: 100%;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.account-manage-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.account-manage-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-white);
+  padding: 16px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+}
+
+.account-manage-name {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.account-manage-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.account-move-btn {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--bg-white);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.account-move-btn:disabled {
+  color: var(--text-light);
+  border-color: var(--border-light);
+  cursor: not-allowed;
+}
+
+.account-edit-btn,
+.account-delete-btn {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.account-edit-btn {
+  background: var(--primary-light);
+  color: var(--primary);
+}
+
+.account-delete-btn {
+  background: #ffe8e8;
+  color: #e84a50;
+}
+
+.add-account-btn {
+  padding: 8px 16px;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+/* 列表头部排序 */
+.list-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  background: var(--bg);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.list-header-col {
+  text-align: right;
+  width: 80px;
+}
+
+.list-header-col-name {
+  flex: 1;
+  text-align: left;
+}
+
+.list-header-col.sortable {
+  cursor: pointer;
+}
+
+.list-header-col.sortable:hover,
+.list-header-col.sortable.active {
+  color: var(--primary);
+}
+
+/* 基金列表优化 */
+.fund-list {
+  background: var(--bg-white);
+}
+
+.fund-item {
+  display: flex;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.fund-item:active {
+  background: var(--bg);
+}
+
+.fund-info {
+  flex: 1;
+}
+
+.fund-name {
+  font-size: 14px;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.fund-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.fund-profit {
+  width: 80px;
+  text-align: right;
+  font-size: 14px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.fund-change {
+  width: 80px;
+  text-align: right;
+  font-size: 14px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 新增按钮 */
+.add-holding-btn {
+  display: block;
+  width: calc(100% - 32px);
+  margin: 16px auto;
+  padding: 14px;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* 自选页面优化 */
+.watch-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  background: var(--bg-white);
+  margin: 0 16px;
+  margin-top: 16px;
+  border-radius: 10px 10px 0 0;
+}
+
+.watch-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.watch-count {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.watch-list {
+  background: var(--bg-white);
+  margin: 0 16px;
+  border-radius: 0 0 10px 10px;
+}
+
+.watch-item {
+  display: flex;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.watch-item:last-child {
+  border-bottom: none;
+}
+
+.watch-item:active {
+  background: var(--bg);
+}
+
+.watch-info {
+  flex: 1;
+}
+
+.watch-name {
+  font-size: 14px;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.watch-code {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.watch-change {
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 行情板块卡片 */
+.sector-section {
+  margin: 12px 16px;
+}
+
+.sector-list-compact .sector-item {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.sector-list-compact .sector-item:last-child {
+  border-bottom: none;
+}
+
+.sector-list-compact {
+  background: var(--bg-white);
+  border-radius: 10px;
+  padding: 0 12px;
+}
+
+/* 资讯页面 */
+.news-header {
+  padding: 16px;
+  background: var(--bg-white);
+}
+
+.news-title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.news-list {
+  margin: 12px 16px;
+}
+
+.news-item {
+  background: var(--bg-white);
+  padding: 16px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+}
+
+.news-item:active {
+  background: var(--bg);
+}
+
+.news-item-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.news-item-summary {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.news-item-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* 新增持有表单优化 */
+.add-form-fund-name {
+  font-size: 13px;
+  color: var(--primary);
+  padding: 0 16px 12px;
+}
+
+.search-fund-btn {
+  padding: 8px 12px;
+  background: var(--primary-light);
+  color: var(--primary);
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-left: 8px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.add-account-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.add-account-label {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.account-select {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-white);
+  font-size: 14px;
+  color: var(--text);
+}
+
+/* 基金详情页优化 */
+.detail-header {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--bg-white);
+  gap: 12px;
+}
+
+.detail-back {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.detail-title-wrap {
+  flex: 1;
+}
+
+.detail-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.detail-code {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.detail-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.detail-valuation {
+  background: var(--bg-white);
+  padding: 20px;
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+
+.valuation-main {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.valuation-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.valuation-value {
+  font-size: 36px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.valuation-info {
+  display: flex;
+  justify-content: space-around;
+  border-top: 1px solid var(--border-light);
+  padding-top: 16px;
+}
+
+.valuation-item {
+  text-align: center;
+}
+
+.valuation-item-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.valuation-item-value {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.detail-sectors {
+  background: var(--bg-white);
+  padding: 16px;
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+
+.detail-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.sector-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sector-tag {
+  padding: 6px 12px;
+  background: var(--primary-light);
+  color: var(--primary);
+  border-radius: 16px;
+  font-size: 13px;
+}
+
+.detail-stocks {
+  background: var(--bg-white);
+  padding: 16px;
+  border-radius: 12px;
+}
+
+.stocks-list {
+  margin-top: 8px;
+}
+
+.stock-item {
+  display: flex;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.stock-item:last-child {
+  border-bottom: none;
+}
+
+.stock-rank {
+  width: 24px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.stock-info {
+  flex: 1;
+}
+
+.stock-name {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.stock-code {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.stock-ratio {
+  font-size: 14px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.empty-inline {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  background: var(--bg-white);
+  border-top: 1px solid var(--border-light);
+}
+
+.detail-action {
+  flex: 1;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-white);
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.detail-action.primary {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+
+.detail-action.danger {
+  color: #e84a50;
+  border-color: #e84a50;
+}
+
+/* 板块总览页优化 */
+.sector-page,
+.sector-funds-page {
+  height: 100%;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--bg-white);
+  border-bottom: 1px solid var(--border-light);
+  gap: 12px;
+}
+
+.modal-title {
+  flex: 1;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.back-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.sector-content,
+.sector-funds-content {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.sector-table-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  background: var(--bg);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.sector-col-name {
+  flex: 1;
+}
+
+.sector-col {
+  width: 80px;
+  text-align: right;
+}
+
+.sector-col.sortable {
+  cursor: pointer;
+}
+
+.sector-col.sortable:hover,
+.sector-col.sortable.active {
+  color: var(--primary);
+}
+
+.sector-list {
+  background: var(--bg-white);
+}
+
+.sector-item {
+  display: flex;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.sector-item:active {
+  background: var(--bg);
+}
+
+.sector-info {
+  flex: 1;
+}
+
+.sector-name {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.sector-col-value {
+  width: 80px;
+  text-align: right;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* empty hint */
+.empty-hint {
+  font-size: 12px;
+  margin-top: 8px;
+  color: var(--text-light);
+}
+
+/* section header */
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.section-arrow {
+  font-size: 13px;
+  color: var(--text-muted);
+}
