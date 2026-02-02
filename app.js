@@ -10,7 +10,7 @@
   // 配置与常量
   // ==========================================
   
-  const API = '/api';
+  const API = '/api/index';
   const CACHE_TTL = 30 * 1000; // 30秒缓存
   const STORAGE_KEYS = {
     holdings: 'yxj_holdings',
@@ -204,7 +204,7 @@
     
     let fundData = {};
     if (allCodes.length > 0) {
-      const resp = await api(`${API}/fund`, { action: 'batch', codes: allCodes.join(',') });
+      const resp = await api(`${API}?module=fund`, { action: 'batch', codes: allCodes.join(',') });
       if (resp.success) {
         resp.data.forEach(f => { fundData[f.code] = f; });
       }
@@ -337,7 +337,7 @@
     let fundData = {};
     const codes = holdings.map(h => h.code).filter(Boolean);
     if (codes.length > 0) {
-      const resp = await api(`${API}/fund`, { action: 'batch', codes: codes.join(',') });
+      const resp = await api(`${API}?module=fund`, { action: 'batch', codes: codes.join(',') });
       if (resp.success) {
         resp.data.forEach(f => { fundData[f.code] = f; });
       }
@@ -438,14 +438,14 @@
     if (!page) return;
     
     // 获取板块数据
-    const sectorResp = await api(`${API}/sector`, { action: 'streak' });
+    const sectorResp = await api(`${API}?module=sector`, { action: 'streak' });
     const sectors = sectorResp.success ? sectorResp.data.slice(0, 5) : [];
     
     // 获取自选基金估值
     let watchData = [];
     if (state.watchlist.length > 0) {
       const codes = state.watchlist.map(w => w.code).join(',');
-      const resp = await api(`${API}/fund`, { action: 'batch', codes });
+      const resp = await api(`${API}?module=fund`, { action: 'batch', codes });
       if (resp.success) {
         watchData = resp.data;
       }
@@ -542,7 +542,7 @@
     const container = $('indexCards');
     if (!container) return;
     
-    const resp = await api(`${API}/market`, { action: 'indices' });
+    const resp = await api(`${API}?module=market`, { action: 'indices' });
     if (resp.success && resp.data.length > 0) {
       container.innerHTML = resp.data.map(idx => `
         <div class="index-card">
@@ -568,7 +568,7 @@
     const container = $('distributionSection');
     if (!container) return;
     
-    const resp = await api(`${API}/market`, { action: 'distribution' });
+    const resp = await api(`${API}?module=market`, { action: 'distribution' });
     if (resp.success) {
       const d = resp.data;
       const dist = d.distribution;
@@ -622,7 +622,7 @@
     const container = $('hotFundsSection');
     if (!container) return;
     
-    const resp = await api(`${API}/fund`, { action: 'hot' });
+    const resp = await api(`${API}?module=fund`, { action: 'hot' });
     if (resp.success) {
       container.innerHTML = `
         <div class="fund-section-header">
@@ -651,7 +651,7 @@
     const container = $('sectorEntrySection');
     if (!container) return;
     
-    const resp = await api(`${API}/sector`, { action: 'streak' });
+    const resp = await api(`${API}?module=sector`, { action: 'streak' });
     if (resp.success) {
       const sectors = resp.data.slice(0, 3);
       container.innerHTML = `
@@ -738,7 +738,7 @@
     const hotList = $('hotList');
     if (!hotList) return;
     
-    const resp = await api(`${API}/fund`, { action: 'hot' });
+    const resp = await api(`${API}?module=fund`, { action: 'hot' });
     if (resp.success) {
       hotList.innerHTML = resp.data.slice(0, 5).map((f, i) => `
         <div class="hot-item" data-code="${f.code}">
@@ -774,7 +774,7 @@
     results.style.display = 'block';
     results.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
     
-    const resp = await api(`${API}/fund`, { action: 'search', keyword });
+    const resp = await api(`${API}?module=fund`, { action: 'search', keyword });
     
     if (resp.success && resp.data.length > 0) {
       results.innerHTML = resp.data.map(f => `
@@ -999,7 +999,7 @@
     modal.classList.add('active');
     page.innerHTML = '<div class="loading" style="padding-top:100px"><div class="spinner"></div></div>';
     
-    const resp = await api(`${API}/fund`, { action: 'detail', code });
+    const resp = await api(`${API}?module=fund`, { action: 'detail', code });
     
     if (!resp.success) {
       page.innerHTML = `
@@ -1168,7 +1168,7 @@
     
     $('sectorBack').onclick = closeSectorModal;
     
-    const resp = await api(`${API}/sector`, { action: 'streak' });
+    const resp = await api(`${API}?module=sector`, { action: 'streak' });
     const content = page.querySelector('.sector-content');
     
     if (resp.success) {

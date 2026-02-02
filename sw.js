@@ -19,9 +19,7 @@ const STATIC_ASSETS = [
 
 // API缓存时间（秒）
 const API_CACHE_TTL = {
-  '/api/fund': 30,
-  '/api/market': 10,
-  '/api/sector': 60
+  '/api/index': 30
 };
 
 // 安装事件 - 预缓存静态资源
@@ -161,8 +159,8 @@ self.addEventListener('sync', event => {
 async function syncData() {
   // 预加载常用数据
   const urls = [
-    '/api/market?action=indices',
-    '/api/sector?action=streak'
+    '/api/index?module=market&action=indices',
+    '/api/index?module=sector&action=streak'
   ];
   
   await Promise.all(urls.map(url => 
