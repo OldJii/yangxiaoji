@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>生成 PWA 图标</title>
+  <style>
+    body { font-family: system-ui; padding: 20px; background: #f5f5f5; }
+    canvas { border: 1px solid #ddd; margin: 10px; }
+    .icons { display: flex; flex-wrap: wrap; gap: 10px; }
+    button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
+    a { display: inline-block; margin: 5px; padding: 8px 16px; background: #3478f6; color: white; text-decoration: none; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>养小基 - PWA 图标生成器</h1>
+  <p>点击按钮生成所有尺寸的图标，然后右键保存。</p>
+  <button onclick="generateAll()">生成所有图标</button>
+  <div class="icons" id="icons"></div>
+  <div id="downloads"></div>
+
+  <script>
+    const sizes = [72, 96, 128, 144, 152, 192, 384, 512];
+    
+    function drawIcon(canvas, size) {
+      const ctx = canvas.getContext('2d');
+      canvas.width = size;
+      canvas.height = size;
+      
+      // 背景渐变
+      const gradient = ctx.createLinearGradient(0, 0, size, size);
+      gradient.addColorStop(0, '#4A90E2');
+      gradient.addColorStop(1, '#3478F6');
+      
+      // 圆角矩形背景
+      const radius = size * 0.21;
+      ctx.beginPath();
+      ctx.moveTo(radius, 0);
+      ctx.lineTo(size - radius, 0);
+      ctx.quadraticCurveTo(size, 0, size, radius);
+      ctx.lineTo(size, size - radius);
+      ctx.quadraticCurveTo(size, size, size - radius, size);
+      ctx.lineTo(radius, size);
+      ctx.quadraticCurveTo(0, size, 0, size - radius);
+      ctx.lineTo(0, radius);
+      ctx.quadraticCurveTo(0, 0, radius, 0);
+      ctx.closePath();
+      ctx.fillStyle = gradient;
+      ctx.fill();
+      
+      // 趋势线
+      ctx.beginPath();
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = size * 0.05;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      
+      const points = [
+        [0.23, 0.66],
+        [0.35, 0.55],
+        [0.47, 0.63],
+        [0.63, 0.43],
+        [0.74, 0.35]
+      ];
+      
+      ctx.moveTo(size * points[0][0], size * points[0][1]);
+      for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(size * points[i][0], size * points[i][1]);
+      }
+      ctx.stroke();
+      
+      // 终点圆圈
+      ctx.beginPath();
+      ctx.arc(size * 0.74, size * 0.35, size * 0.04, 0, Math.PI * 2);
+      ctx.fillStyle = 'white';
+      ctx.fill();
+      
+      // 文字（仅大尺寸）
+      if (size >= 128) {
+        ctx.font = `bold ${size * 0.09}px "PingFang SC", system-ui`;
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.textAlign = 'center';
+        ctx.fillText('养小基', size * 0.5, size * 0.88);
+      }
+    }
+    
+    function generateAll() {
+      const container = document.getElementById('icons');
+      const downloads = document.getElementById('downloads');
+      container.innerHTML = '';
+      downloads.innerHTML = '<h3>下载链接：</h3>';
+      
+      sizes.forEach(size => {
+        const canvas = document.createElement('canvas');
+        drawIcon(canvas, size);
+        container.appendChild(canvas);
+        
+        // 创建下载链接
+        const link = document.createElement('a');
+        link.download = `icon-${size}.png`;
+        link.href = canvas.toDataURL('image/png');
+        link.textContent = `icon-${size}.png`;
+        downloads.appendChild(link);
+      });
+    }
+    
+    // 自动生成
+    generateAll();
+  </script>
+</body>
+</html>
