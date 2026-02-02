@@ -1,5 +1,11 @@
 {
   "version": 2,
+  "rewrites": [
+    { "source": "/market", "destination": "/api/index?module=market" },
+    { "source": "/fund", "destination": "/api/index?module=fund" },
+    { "source": "/sector", "destination": "/api/index?module=sector" },
+    { "source": "/news", "destination": "/api/index?module=news" }
+  ],
   "headers": [
     {
       "source": "/api/(.*)",

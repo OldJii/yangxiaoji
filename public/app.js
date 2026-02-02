@@ -11,7 +11,8 @@
   // ==========================================
   
   const API = '/api/index';
-  const CACHE_TTL = 60 * 1000; // 60秒缓存
+  const CACHE_TTL = 60 * 1000; // 默认缓存 60 秒
+  const CACHE_LIMIT = 200;
   const STORAGE_KEYS = {
     holdings: 'yxj_holdings',
     watchlist: 'yxj_watchlist',
@@ -112,35 +113,73 @@
     state.holdings = storage.get(STORAGE_KEYS.holdings, {});
     state.watchlist = storage.get(STORAGE_KEYS.watchlist, []);
     state.searchHistory = storage.get(STORAGE_KEYS.searchHistory, []);
+    state.cache = storage.get(STORAGE_KEYS.cache, {});
   };
 
   const saveHoldings = () => storage.set(STORAGE_KEYS.holdings, state.holdings);
   const saveWatchlist = () => storage.set(STORAGE_KEYS.watchlist, state.watchlist);
   const saveAccounts = () => storage.set(STORAGE_KEYS.accounts, state.accounts);
   const saveSearchHistory = () => storage.set(STORAGE_KEYS.searchHistory, state.searchHistory);
+  const saveCache = () => storage.set(STORAGE_KEYS.cache, state.cache);
 
   // ==========================================
   // API 请求（带缓存）
   // ==========================================
   
+  const getCacheTTL = (url) => {
+    const module = url.searchParams.get('module') || '';
+    const action = url.searchParams.get('action') || '';
+    if (module === 'market' && action === 'indices') return 10 * 1000;
+    if (module === 'fund' && action === 'detail') return 60 * 1000;
+    if (module === 'fund' && action === 'batch') return 30 * 1000;
+    if (module === 'fund' && action === 'info') return 30 * 1000;
+    if (module === 'fund' && action === 'hot') return 120 * 1000;
+    if (module === 'fund' && action === 'search') return 60 * 1000;
+    if (module === 'sector' && action === 'funds') return 300 * 1000;
+    if (module === 'sector') return 300 * 1000;
+    if (module === 'news') return 300 * 1000;
+    return CACHE_TTL;
+  };
+
+  const pruneCache = () => {
+    const keys = Object.keys(state.cache);
+    if (keys.length <= CACHE_LIMIT) return;
+    keys.sort((a, b) => (state.cache[a]?.ts || 0) - (state.cache[b]?.ts || 0));
+    const removeCount = keys.length - CACHE_LIMIT;
+    keys.slice(0, removeCount).forEach(k => delete state.cache[k]);
+  };
+
+  const readCache = (key) => {
+    const cached = state.cache[key];
+    if (!cached) return null;
+    const ttl = cached.ttl || CACHE_TTL;
+    if (Date.now() - cached.ts < ttl) return cached.data;
+    delete state.cache[key];
+    return null;
+  };
+
+  const writeCache = (key, data, ttl) => {
+    state.cache[key] = { data, ts: Date.now(), ttl };
+    pruneCache();
+    saveCache();
+  };
+
   const api = async (endpoint, params = {}) => {
     const url = new URL(endpoint, location.origin);
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
     
     const cacheKey = url.toString();
-    const cached = state.cache[cacheKey];
-    if (cached && Date.now() - cached.ts < CACHE_TTL) {
-      return cached.data;
-    }
+    const cached = readCache(cacheKey);
+    if (cached) return cached;
     
     try {
       const resp = await fetch(url, { 
         headers: { 'Accept': 'application/json' },
-        signal: AbortSignal.timeout(15000)
+        signal: AbortSignal.timeout(12000)
       });
       const data = await resp.json();
       
-      state.cache[cacheKey] = { data, ts: Date.now() };
+      writeCache(cacheKey, data, getCacheTTL(url));
       return data;
     } catch (e) {
       console.error('API Error:', e);
@@ -387,7 +426,9 @@
         `}
       </div>
       ${accountId ? `
-        <button class="add-holding-btn" data-account="${accountId}">+ 新增持有</button>
+        <div class="fund-list-footer">
+          <button class="add-holding-btn" data-account="${accountId}">+ 新增持有</button>
+        </div>
       ` : ''}
     `;
     
@@ -554,8 +595,11 @@
     
     page.innerHTML = `
       <div class="watch-header">
-        <span class="watch-title">自选基金</span>
-        <span class="watch-count">${state.watchlist.length}只</span>
+        <div class="watch-title-group">
+          <div class="watch-title">自选基金</div>
+          <div class="watch-subtitle">已关注 ${state.watchlist.length} 只</div>
+        </div>
+        <div class="watch-count-badge">${state.watchlist.length}</div>
       </div>
       <div class="list-header">
         <div class="list-header-col list-header-col-name">基金</div>
@@ -621,13 +665,16 @@
     
     const resp = await api(`${API}?module=market`, { action: 'indices' });
     if (resp.success && resp.data.length > 0) {
-      container.innerHTML = resp.data.map(idx => `
-        <div class="index-card">
+      container.innerHTML = resp.data.map(idx => {
+        const changeClass = cls(idx.change_percent) || 'flat';
+        return `
+        <div class="index-card ${changeClass}">
           <div class="index-card-name">${idx.name}</div>
           <div class="index-card-value">${idx.value}</div>
           <div class="index-card-change ${cls(idx.change_percent)}">${idx.change} ${idx.change_percent}</div>
         </div>
-      `).join('');
+      `;
+      }).join('');
       
       const sh = resp.data[0];
       if (sh) {
@@ -646,15 +693,16 @@
     
     const resp = await api(`${API}?module=sector`, { action: 'streak' });
     if (resp.success) {
-      const sectors = resp.data;
+      const sectors = resp.data || [];
+      const topSectors = sectors.slice(0, 10);
       container.innerHTML = `
         <div class="section-header" id="openSectorBtn">
           <span class="section-title">板块总览</span>
           <span class="section-arrow">全部 ›</span>
         </div>
         <div class="sector-list sector-list-compact">
-          ${sectors.map(s => `
-            <div class="sector-item">
+          ${topSectors.map(s => `
+            <div class="sector-item" data-code="${s.code}" data-name="${s.name}">
               <div class="sector-info">
                 <div class="sector-name">${s.name}</div>
               </div>
@@ -664,8 +712,10 @@
           `).join('')}
         </div>
       `;
-      
-      container.onclick = () => openSectorModal();
+      $('openSectorBtn').onclick = () => openSectorModal();
+      container.querySelectorAll('.sector-item').forEach(item => {
+        item.onclick = () => openSectorFundsModal(item.dataset.code, item.dataset.name);
+      });
     } else {
       container.innerHTML = `
         <div class="empty">
@@ -685,9 +735,6 @@
     if (!page) return;
     
     page.innerHTML = `
-      <div class="news-header">
-        <span class="news-title">基金资讯</span>
-      </div>
       <div class="news-list" id="newsList">
         <div class="loading"><div class="spinner"></div></div>
       </div>
@@ -826,7 +873,7 @@
             <div class="result-name">${f.name}</div>
             <div class="result-meta">
               ${f.code}
-              ${f.category ? `<span class="result-tag">${f.category}</span>` : ''}
+              ${[f.category, f.type].filter(Boolean).map(tag => `<span class="result-tag">${tag}</span>`).join('')}
             </div>
           </div>
           <button class="result-action ${state.watchlist.some(w => w.code === f.code) ? 'added' : ''}" 
@@ -1052,14 +1099,32 @@
     if (!modal || !page) return;
     
     modal.classList.add('active');
-    page.innerHTML = '<div class="loading" style="padding-top:100px"><div class="spinner"></div></div>';
+    page.innerHTML = `
+      <div class="detail-header">
+        <button class="back-btn" id="detailBack">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M15 18l-6-6 6-6"/>
+          </svg>
+        </button>
+        <div class="detail-title-wrap">
+          <div class="detail-title">基金详情</div>
+          <div class="detail-code">${code}</div>
+        </div>
+      </div>
+      <div class="loading" style="padding-top:80px"><div class="spinner"></div></div>
+    `;
+    $('detailBack').onclick = closeDetailModal;
     
     const resp = await api(`${API}?module=fund`, { action: 'detail', code });
     
     if (!resp.success) {
       page.innerHTML = `
         <div class="detail-header">
-          <button class="detail-back" id="detailBack">←</button>
+          <button class="back-btn" id="detailBack">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 18l-6-6 6-6"/>
+            </svg>
+          </button>
           <div class="detail-title-wrap">
             <div class="detail-title">${code}</div>
           </div>
@@ -1079,7 +1144,11 @@
     
     page.innerHTML = `
       <div class="detail-header">
-        <button class="detail-back" id="detailBack">←</button>
+        <button class="back-btn" id="detailBack">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M15 18l-6-6 6-6"/>
+          </svg>
+        </button>
         <div class="detail-title-wrap">
           <div class="detail-title">${fund.name || code}</div>
           <div class="detail-code">${fund.code}</div>
@@ -1130,7 +1199,10 @@
                     <div class="stock-name">${s.name}</div>
                     <div class="stock-code">${s.code}</div>
                   </div>
-                  <div class="stock-ratio">${s.ratio}</div>
+                  <div class="stock-metrics">
+                    <div class="stock-ratio">${s.ratio}</div>
+                    <div class="stock-change ${cls(s.change)}">${s.change !== undefined && s.change !== null && s.change !== '' ? `${sign(s.change)}${fmt(s.change)}%` : '--'}</div>
+                  </div>
                 </div>
               `).join('')}
             </div>
@@ -1208,7 +1280,11 @@
     modal.classList.add('active');
     page.innerHTML = `
       <div class="modal-header">
-        <button class="back-btn" id="sectorBack">←</button>
+        <button class="back-btn" id="sectorBack">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M15 18l-6-6 6-6"/>
+          </svg>
+        </button>
         <h1 class="modal-title">板块总览</h1>
       </div>
       <div class="sector-content">
@@ -1313,7 +1389,11 @@
     modal.classList.add('active');
     page.innerHTML = `
       <div class="modal-header">
-        <button class="back-btn" id="sectorFundsBack">←</button>
+        <button class="back-btn" id="sectorFundsBack">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M15 18l-6-6 6-6"/>
+          </svg>
+        </button>
         <h1 class="modal-title">${sectorName}</h1>
       </div>
       <div class="sector-funds-content">
@@ -1339,7 +1419,7 @@
                 <div class="fund-name">${f.name}</div>
                 <div class="fund-meta">${f.code}</div>
               </div>
-              <div class="fund-change ${cls(f.change)}">${f.change ? sign(parseFloat(f.change)) + f.change + '%' : '--'}</div>
+              <div class="fund-change ${cls(f.change)}">${f.change !== undefined && f.change !== null && f.change !== '' ? `${sign(parseFloat(f.change))}${fmt(f.change)}%` : '--'}</div>
             </div>
           `).join('')}
         </div>
@@ -1395,6 +1475,15 @@
   
   const switchPage = (pageId) => {
     state.currentPage = pageId;
+    const headerTitle = $('headerTitle');
+    const headerTabs = $('headerTabs');
+    const searchBtn = $('searchBtn');
+    const tabNames = {
+      hold: '持有',
+      watch: '自选',
+      market: '行情',
+      news: '资讯'
+    };
     
     $$('.tab').forEach(tab => {
       tab.classList.toggle('active', tab.dataset.tab === pageId);
@@ -1405,9 +1494,18 @@
     });
     
     if (pageId === 'hold') {
+      headerTitle?.classList.add('is-hidden');
+      headerTabs?.classList.remove('is-hidden');
+      searchBtn?.classList.remove('is-hidden');
       renderHoldTabs();
     } else {
-      $('headerTabs').innerHTML = '';
+      if (headerTitle) {
+        headerTitle.textContent = tabNames[pageId] || '';
+        headerTitle.classList.remove('is-hidden');
+      }
+      headerTabs?.classList.add('is-hidden');
+      if (headerTabs) headerTabs.innerHTML = '';
+      searchBtn?.classList.add('is-hidden');
     }
     
     switch (pageId) {
@@ -1440,6 +1538,7 @@
     });
     
     $('searchBtn')?.addEventListener('click', () => openSearchModal());
+    $('searchBack')?.addEventListener('click', closeSearchModal);
     $('searchCancel')?.addEventListener('click', closeSearchModal);
     
     $('searchInput')?.addEventListener('input', (e) => {

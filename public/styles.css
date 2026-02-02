@@ -5,10 +5,10 @@
 
 :root {
   /* 颜色系统 */
-  --bg: #f5f6fa;
+  --bg: #ffffff;
   --bg-white: #ffffff;
   --bg-card: #ffffff;
-  --bg-input: #f5f6fa;
+  --bg-input: #ffffff;
   --border: #e8e8e8;
   --border-light: #f0f0f0;
   
@@ -23,10 +23,12 @@
   --primary-light: #e8f0fe;
   
   /* 涨跌颜色 */
-  --rise: #e84a50;
+  --rise: #d92b34;
   --rise-bg: #e84a50;
-  --fall: #2db84d;
+  --rise-light: #ffecec;
+  --fall: #1f8b3a;
   --fall-bg: #2db84d;
+  --fall-light: #e8f8ee;
   
   /* 安全区域 */
   --safe-top: env(safe-area-inset-top, 0px);
@@ -100,6 +102,25 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 0 16px;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.header-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.is-hidden {
+  display: none !important;
 }
 
 .header-tabs {
@@ -528,13 +549,13 @@ body {
 
 .fund-change {
   min-width: 72px;
-  height: 30px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 4px;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: #fff;
 }
@@ -551,22 +572,30 @@ body {
   background: var(--text-muted);
 }
 
+.fund-change:not(.rise):not(.fall) {
+  background: var(--text-muted);
+}
+
 /* ==========================================
    新增持有按钮
    ========================================== */
 
-.add-holding-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 14px 16px;
-  color: var(--text-secondary);
-  font-size: 14px;
+.fund-list-footer {
+  padding: 12px 16px 16px;
   background: var(--bg-white);
+}
+
+.add-holding-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  color: var(--primary);
+  font-size: 14px;
+  font-weight: 500;
+  background: none;
   border: none;
-  width: 100%;
-  text-align: left;
+  cursor: pointer;
 }
 
 .add-holding-btn svg {
@@ -590,7 +619,7 @@ body {
   gap: 12px;
   scrollbar-width: none;
   -ms-overflow-style: none;
-  background: var(--primary);
+  background: var(--bg-white);
 }
 
 .index-cards::-webkit-scrollbar {
@@ -600,10 +629,10 @@ body {
 .index-card {
   flex-shrink: 0;
   width: 100px;
-  background: rgba(255,255,255,0.15);
+  background: #f3f4f6;
   border-radius: 8px;
   padding: 12px;
-  color: #fff;
+  color: var(--text-secondary);
 }
 
 .index-card-name {
@@ -622,6 +651,21 @@ body {
 .index-card-change {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+.index-card.rise {
+  background: var(--rise-light);
+  color: var(--rise);
+}
+
+.index-card.fall {
+  background: var(--fall-light);
+  color: var(--fall);
+}
+
+.index-card.flat {
+  background: #f3f4f6;
+  color: var(--text-secondary);
 }
 
 /* 基金涨跌分布 */
@@ -938,7 +982,8 @@ body {
   flex: 1;
   display: flex;
   align-items: center;
-  background: var(--bg);
+  background: var(--bg-white);
+  border: 1px solid var(--border-light);
   border-radius: 8px;
   padding: 0 12px;
   height: 36px;
@@ -1151,15 +1196,15 @@ body {
 }
 
 .back-btn {
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: none;
   background: none;
   color: var(--text);
-  margin-left: -12px;
+  cursor: pointer;
 }
 
 .add-title {
@@ -1855,9 +1900,10 @@ body {
   display: flex;
   align-items: center;
   padding: 10px 16px;
-  background: var(--bg);
+  background: var(--bg-white);
   font-size: 12px;
   color: var(--text-muted);
+  border-bottom: 1px solid var(--border-light);
 }
 
 .list-header-col {
@@ -1919,24 +1965,28 @@ body {
 }
 
 .fund-change {
-  width: 80px;
-  text-align: right;
-  font-size: 14px;
-  font-weight: 500;
+  min-width: 72px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+  color: #fff;
 }
 
 /* 新增按钮 */
 .add-holding-btn {
-  display: block;
-  width: calc(100% - 32px);
-  margin: 16px auto;
-  padding: 14px;
-  background: var(--primary);
-  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  background: none;
+  color: var(--primary);
   border: none;
-  border-radius: 10px;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   cursor: pointer;
 }
@@ -1953,14 +2003,34 @@ body {
   border-radius: 10px 10px 0 0;
 }
 
+.watch-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .watch-title {
   font-size: 16px;
   font-weight: 600;
 }
 
-.watch-count {
-  font-size: 13px;
+.watch-subtitle {
+  font-size: 12px;
   color: var(--text-muted);
+}
+
+.watch-count-badge {
+  min-width: 40px;
+  height: 24px;
+  padding: 0 8px;
+  background: var(--primary-light);
+  color: var(--primary);
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .watch-list {
@@ -2262,6 +2332,14 @@ body {
   flex: 1;
 }
 
+.stock-metrics {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 72px;
+}
+
 .stock-name {
   font-size: 14px;
   color: var(--text);
@@ -2275,6 +2353,12 @@ body {
 .stock-ratio {
   font-size: 14px;
   color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-change {
+  font-size: 12px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 

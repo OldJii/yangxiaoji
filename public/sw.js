@@ -3,7 +3,7 @@
  * 实现离线缓存和性能优化
  */
 
-const CACHE_VERSION = 'yangxiaoji-v1';
+const CACHE_VERSION = 'yangxiaoji-v2';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 
@@ -48,7 +48,13 @@ self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   
   // API请求 - 网络优先，带缓存回退
-  if (url.pathname.startsWith('/api/')) {
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname === '/market' ||
+    url.pathname === '/fund' ||
+    url.pathname === '/sector' ||
+    url.pathname === '/news'
+  ) {
     event.respondWith(handleApiRequest(event.request));
     return;
   }
