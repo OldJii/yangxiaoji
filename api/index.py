@@ -178,22 +178,33 @@ def fund_hot():
         return cached
     
     try:
-        url = "https://fundmobapi.eastmoney.com/FundMApi/FundRankNewList.ashx"
+        url = "https://fund.eastmoney.com/data/rankhandler.aspx"
         params = {
-            "fundtype": "0", "sorttype": "SYL_D", "sort": "desc",
-            "pageindex": "0", "pagesize": "20", "plat": "Iphone"
+            "op": "ph", "dt": "kf", "ft": "all", "rs": "", "gs": "0",
+            "sc": "rzdf", "st": "desc", "pi": "1", "pn": "20", "dx": "1"
         }
-        resp = SESSION.get(url, params=params, timeout=5, verify=False)
-        data = resp.json()
+        headers = {
+            "Referer": "https://fund.eastmoney.com/",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+        }
+        resp = SESSION.get(url, params=params, headers=headers, timeout=10, verify=False)
+        
+        # 解析 var rankData = {...} 格式
+        text = resp.text
+        match = re.search(r'datas:\[(.*?)\]', text)
+        if not match:
+            return {"success": False, "message": "解析数据失败"}
         
         results = []
-        if data.get("Datas"):
-            for item in data["Datas"]:
+        items = match.group(1).split('","')
+        for item in items[:20]:
+            parts = item.strip('"').split(',')
+            if len(parts) >= 7:
                 results.append({
-                    "code": item.get("FCODE", ""),
-                    "name": item.get("SHORTNAME", ""),
-                    "change": item.get("SYL_D", "0"),
-                    "type": item.get("FTYPE", "")
+                    "code": parts[0],
+                    "name": parts[1],
+                    "change": parts[6] if parts[6] else "0",
+                    "type": "混合型"
                 })
         
         result = {"success": True, "data": results}
@@ -214,32 +225,70 @@ def market_indices():
     if cached:
         return cached
     
+    # 尝试多个数据源
     try:
-        codes = "s_sh000001,s_sz399001,s_sz399006,s_sh000300"
-        url = f"https://hq.sinajs.cn/list={codes}"
-        resp = SESSION.get(url, timeout=5, verify=False)
+        # 方案1: 使用东方财富行情API
+        url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+        params = {
+            "fltt": "2",
+            "secids": "1.000001,0.399001,0.399006,1.000300",
+            "fields": "f2,f3,f4,f12,f14"
+        }
+        resp = SESSION.get(url, params=params, timeout=8, verify=False)
+        data = resp.json()
         
         indices = []
-        lines = resp.text.strip().split('\n')
-        names = ["上证指数", "深证成指", "创业板指", "沪深300"]
-        
-        for i, line in enumerate(lines):
-            if '="' not in line:
-                continue
-            data = line.split('="')[1].rstrip('";').split(',')
-            if len(data) >= 4:
+        if data.get("data", {}).get("diff"):
+            for item in data["data"]["diff"]:
+                change = item.get("f4", 0)
+                change_pct = item.get("f3", 0)
                 indices.append({
-                    "name": names[i] if i < len(names) else data[0],
-                    "value": data[1],
-                    "change": data[2],
-                    "change_percent": f"{data[3]}%"
+                    "name": item.get("f14", ""),
+                    "value": str(item.get("f2", 0)),
+                    "change": f"{'+' if change >= 0 else ''}{change}",
+                    "change_percent": f"{'+' if change_pct >= 0 else ''}{change_pct}%"
                 })
         
-        result = {"success": True, "data": indices}
-        set_cache(cache_key, result, ttl=10)
-        return result
+        if indices:
+            result = {"success": True, "data": indices}
+            set_cache(cache_key, result, ttl=10)
+            return result
+    except Exception:
+        pass
+    
+    # 方案2: 使用腾讯财经API作为备用
+    try:
+        url = "https://qt.gtimg.cn/q=sh000001,sz399001,sz399006,sh000300"
+        resp = SESSION.get(url, timeout=8, verify=False)
+        text = resp.text
+        
+        indices = []
+        names = ["上证指数", "深证成指", "创业板指", "沪深300"]
+        lines = text.strip().split('\n')
+        
+        for i, line in enumerate(lines):
+            if '~' not in line:
+                continue
+            parts = line.split('~')
+            if len(parts) >= 35:
+                value = parts[3]
+                change = parts[31]
+                change_pct = parts[32]
+                indices.append({
+                    "name": names[i] if i < len(names) else parts[1],
+                    "value": value,
+                    "change": change,
+                    "change_percent": f"{change_pct}%"
+                })
+        
+        if indices:
+            result = {"success": True, "data": indices}
+            set_cache(cache_key, result, ttl=10)
+            return result
     except Exception as e:
         return {"success": False, "message": f"获取指数失败: {str(e)}"}
+    
+    return {"success": False, "message": "获取指数失败: 所有数据源不可用"}
 
 
 def market_distribution():

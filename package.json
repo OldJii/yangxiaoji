@@ -4,7 +4,6 @@
   "description": "养小基 - 基金持仓管理 PWA",
   "private": true,
   "scripts": {
-    "dev": "vercel dev",
     "build": "echo 'Static site - no build required'",
     "deploy": "vercel --prod"
   },
