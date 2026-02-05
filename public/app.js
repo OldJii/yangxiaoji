@@ -13,13 +13,19 @@
   const API = '/api/index';
   const CACHE_TTL = 60 * 1000; // 默认缓存 60 秒
   const CACHE_LIMIT = 200;
+  const DIRECT_TIMEOUT = 8000;
+  const EASTMONEY_UT = 'fa5fd1943c7b386f172d6893dbfba10b';
   const STORAGE_KEYS = {
     holdings: 'yxj_holdings',
     watchlist: 'yxj_watchlist',
     accounts: 'yxj_accounts',
     searchHistory: 'yxj_search_history',
-    cache: 'yxj_cache'
+    cache: 'yxj_cache',
+    emptySectors: 'yxj_empty_sectors',
+    fundNames: 'yxj_fund_names'
   };
+  // 实测无对应基金数据的板块（点击后为空），默认直接剔除
+  const DEFAULT_EMPTY_SECTORS = ['BK1035']; // 美容护理
 
   // ==========================================
   // 状态管理
@@ -33,6 +39,8 @@
     watchlist: [],
     cache: {},
     searchHistory: [],
+    emptySectors: [],
+    fundNameMap: {},
     // 排序状态
     holdSort: { field: 'profit', asc: false },
     watchSort: { field: 'change', asc: false },
@@ -114,6 +122,30 @@
     state.watchlist = storage.get(STORAGE_KEYS.watchlist, []);
     state.searchHistory = storage.get(STORAGE_KEYS.searchHistory, []);
     state.cache = storage.get(STORAGE_KEYS.cache, {});
+    const cachedEmptySectors = storage.get(STORAGE_KEYS.emptySectors, []);
+    state.emptySectors = Array.from(new Set([...DEFAULT_EMPTY_SECTORS, ...cachedEmptySectors]));
+    if (state.emptySectors.length !== cachedEmptySectors.length) {
+      saveEmptySectors();
+    }
+    state.fundNameMap = storage.get(STORAGE_KEYS.fundNames, {});
+
+    // 从持仓/自选同步基金名称缓存，避免详情页名称缺失
+    let nameUpdated = false;
+    Object.values(state.holdings).forEach(list => {
+      list.forEach(h => {
+        if (h.code && h.name && !state.fundNameMap[h.code]) {
+          state.fundNameMap[h.code] = h.name;
+          nameUpdated = true;
+        }
+      });
+    });
+    state.watchlist.forEach(w => {
+      if (w.code && w.name && !state.fundNameMap[w.code]) {
+        state.fundNameMap[w.code] = w.name;
+        nameUpdated = true;
+      }
+    });
+    if (nameUpdated) saveFundNames();
   };
 
   const saveHoldings = () => storage.set(STORAGE_KEYS.holdings, state.holdings);
@@ -121,6 +153,8 @@
   const saveAccounts = () => storage.set(STORAGE_KEYS.accounts, state.accounts);
   const saveSearchHistory = () => storage.set(STORAGE_KEYS.searchHistory, state.searchHistory);
   const saveCache = () => storage.set(STORAGE_KEYS.cache, state.cache);
+  const saveEmptySectors = () => storage.set(STORAGE_KEYS.emptySectors, state.emptySectors);
+  const saveFundNames = () => storage.set(STORAGE_KEYS.fundNames, state.fundNameMap);
 
   // ==========================================
   // API 请求（带缓存）
@@ -130,14 +164,15 @@
     const module = url.searchParams.get('module') || '';
     const action = url.searchParams.get('action') || '';
     if (module === 'market' && action === 'indices') return 10 * 1000;
-    if (module === 'fund' && action === 'detail') return 60 * 1000;
-    if (module === 'fund' && action === 'batch') return 30 * 1000;
-    if (module === 'fund' && action === 'info') return 30 * 1000;
-    if (module === 'fund' && action === 'hot') return 120 * 1000;
-    if (module === 'fund' && action === 'search') return 60 * 1000;
-    if (module === 'sector' && action === 'funds') return 300 * 1000;
-    if (module === 'sector') return 300 * 1000;
-    if (module === 'news') return 300 * 1000;
+    if (module === 'fund' && action === 'detail') return 2 * 60 * 1000;
+    if (module === 'fund' && action === 'batch') return 20 * 1000;
+    if (module === 'fund' && action === 'info') return 60 * 1000;
+    if (module === 'fund' && action === 'hot') return 10 * 60 * 1000;
+    if (module === 'fund' && action === 'search') return 2 * 60 * 1000;
+    if (module === 'sector' && action === 'funds') return 15 * 60 * 1000;
+    if (module === 'sector' && action === 'streak') return 2 * 60 * 1000;
+    if (module === 'sector' && action === 'list') return 2 * 60 * 1000;
+    if (module === 'news') return 5 * 60 * 1000;
     return CACHE_TTL;
   };
 
@@ -164,6 +199,221 @@
     saveCache();
   };
 
+  const rememberFundName = (code, name) => {
+    const safeCode = (code || '').trim();
+    const safeName = (name || '').trim();
+    if (!safeCode || !safeName) return;
+    if (state.fundNameMap[safeCode] === safeName) return;
+    state.fundNameMap[safeCode] = safeName;
+    saveFundNames();
+  };
+
+  const getFundNameHint = (code, nameHint) => {
+    const safeCode = (code || '').trim();
+    if (nameHint && nameHint.trim()) return nameHint.trim();
+    const fromWatch = state.watchlist.find(w => w.code === safeCode)?.name;
+    if (fromWatch) return fromWatch;
+    for (const list of Object.values(state.holdings)) {
+      const hit = list.find(h => h.code === safeCode);
+      if (hit?.name) return hit.name;
+    }
+    return state.fundNameMap[safeCode] || '';
+  };
+
+  const isMoneyFund = (fund) => {
+    const tags = [fund?.category, fund?.type, fund?.name].filter(Boolean).join(' ');
+    return /货币|现金/.test(tags);
+  };
+
+  const isEmptySector = (code) => state.emptySectors.includes(code);
+
+  const markEmptySector = (code, name) => {
+    if (!code || isEmptySector(code)) return;
+    state.emptySectors.push(code);
+    saveEmptySectors();
+    toast(`${name || '该'}板块暂无基金数据，已移出列表`);
+  };
+
+  // CORS 允许的上游接口优先直连，失败回退代理
+  const fetchJson = async (url, options = {}) => {
+    const resp = await fetch(url, {
+      ...options,
+      headers: { 'Accept': 'application/json', ...(options.headers || {}) },
+      signal: AbortSignal.timeout(DIRECT_TIMEOUT)
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+  };
+
+  const fetchText = async (url, options = {}) => {
+    const resp = await fetch(url, {
+      ...options,
+      headers: { 'Accept': '*/*', ...(options.headers || {}) },
+      signal: AbortSignal.timeout(DIRECT_TIMEOUT)
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.text();
+  };
+
+  const runPool = async (items, limit, worker) => {
+    let index = 0;
+    const runners = Array.from({ length: Math.min(limit, items.length) }, () => (async () => {
+      while (index < items.length) {
+        const current = items[index];
+        index += 1;
+        await worker(current);
+      }
+    })());
+    await Promise.allSettled(runners);
+  };
+
+  const directMarketIndices = async () => {
+    const url = new URL('https://push2.eastmoney.com/api/qt/ulist.np/get');
+    url.searchParams.set('fltt', '2');
+    url.searchParams.set('secids', '1.000001,0.399001,0.399006,1.000300');
+    url.searchParams.set('fields', 'f2,f3,f4,f12,f14');
+
+    const data = await fetchJson(url);
+    const diff = data?.data?.diff || [];
+    if (!diff.length) throw new Error('empty');
+
+    const indices = diff.map(item => {
+      const change = Number(item.f4 || 0);
+      const changePct = Number(item.f3 || 0);
+      return {
+        name: item.f14 || '',
+        value: String(item.f2 ?? ''),
+        change: `${change >= 0 ? '+' : ''}${change}`,
+        change_percent: `${changePct >= 0 ? '+' : ''}${changePct}%`
+      };
+    });
+
+    return { success: true, data: indices };
+  };
+
+  const directSectorList = async () => {
+    const url = new URL('https://push2.eastmoney.com/api/qt/clist/get');
+    url.searchParams.set('fid', 'f62');
+    url.searchParams.set('po', '1');
+    url.searchParams.set('pz', '100');
+    url.searchParams.set('pn', '1');
+    url.searchParams.set('np', '1');
+    url.searchParams.set('fltt', '2');
+    url.searchParams.set('invt', '2');
+    url.searchParams.set('ut', EASTMONEY_UT);
+    url.searchParams.set('fs', 'm:90+t:2');
+    url.searchParams.set('fields', 'f12,f14,f2,f3,f62,f184,f104,f105');
+
+    const data = await fetchJson(url);
+    const diff = data?.data?.diff || [];
+    if (!diff.length) throw new Error('empty');
+
+    const sectors = diff.map(item => {
+      const rawChange = item.f3;
+      const changeVal = rawChange === '-' || rawChange === null ? 0 : Number(rawChange);
+      return {
+        name: item.f14 || '',
+        code: item.f12 || '',
+        change_percent: `${changeVal >= 0 ? '+' : ''}${changeVal}%`,
+        up_count: item.f104 || 0,
+        down_count: item.f105 || 0
+      };
+    });
+
+    return { success: true, data: sectors };
+  };
+
+  const calcSectorStreak = async (code) => {
+    // 单板块连涨结果缓存，避免重复多次拉K线
+    const cacheKey = `sector_streak_item:${code}`;
+    const cached = readCache(cacheKey);
+    if (cached !== null) return cached;
+
+    const url = new URL('https://push2his.eastmoney.com/api/qt/stock/kline/get');
+    url.searchParams.set('secid', `90.${code}`);
+    url.searchParams.set('klt', '101');
+    url.searchParams.set('fqt', '1');
+    url.searchParams.set('lmt', '10');
+    url.searchParams.set('end', '20500101');
+    url.searchParams.set('fields1', 'f1,f2,f3');
+    url.searchParams.set('fields2', 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61');
+    url.searchParams.set('ut', EASTMONEY_UT);
+
+    const data = await fetchJson(url);
+    const klines = data?.data?.klines || [];
+    if (klines.length < 2) {
+      writeCache(cacheKey, 0, 30 * 60 * 1000);
+      return 0;
+    }
+
+    const closes = [];
+    klines.forEach(item => {
+      const parts = item.split(',');
+      if (parts.length >= 3) {
+        const close = Number(parts[2]);
+        if (!Number.isNaN(close)) closes.push(close);
+      }
+    });
+    if (closes.length < 2) {
+      writeCache(cacheKey, 0, 30 * 60 * 1000);
+      return 0;
+    }
+
+    let streak = 0;
+    let lastSign = 0;
+    for (let i = closes.length - 1; i > 0; i--) {
+      const diff = closes[i] - closes[i - 1];
+      const signVal = diff > 0 ? 1 : diff < 0 ? -1 : 0;
+      if (signVal === 0) break;
+      if (lastSign === 0) {
+        lastSign = signVal;
+        streak = signVal > 0 ? 1 : -1;
+        continue;
+      }
+      if (signVal === lastSign) {
+        streak = signVal > 0 ? streak + 1 : streak - 1;
+      } else {
+        break;
+      }
+    }
+
+    writeCache(cacheKey, streak, 30 * 60 * 1000);
+    return streak;
+  };
+
+  const directSectorStreak = async (url) => {
+    const listResp = await directSectorList();
+    if (!listResp.success) throw new Error('sector list failed');
+    const limit = Number(url.searchParams.get('limit') || 0);
+    const sectors = limit ? listResp.data.slice(0, limit) : listResp.data;
+
+    const streakMap = {};
+    const poolSize = Math.min(10, Math.max(2, sectors.length));
+    await runPool(sectors, poolSize, async (sector) => {
+      try {
+        const streak = await calcSectorStreak(sector.code);
+        streakMap[sector.code] = streak;
+      } catch (e) {
+        streakMap[sector.code] = 0;
+      }
+    });
+
+    return {
+      success: true,
+      data: sectors.map(s => ({ ...s, streak_days: streakMap[s.code] ?? 0 }))
+    };
+  };
+
+  const tryDirectApi = async (url) => {
+    const module = url.searchParams.get('module') || '';
+    const action = url.searchParams.get('action') || '';
+    const key = `${module}:${action}`;
+    if (key === 'market:indices') return directMarketIndices();
+    if (key === 'sector:list') return directSectorList();
+    if (key === 'sector:streak') return directSectorStreak(url);
+    return null;
+  };
+
   const api = async (endpoint, params = {}) => {
     const url = new URL(endpoint, location.origin);
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
@@ -171,6 +421,16 @@
     const cacheKey = url.toString();
     const cached = readCache(cacheKey);
     if (cached) return cached;
+
+    try {
+      const direct = await tryDirectApi(url);
+      if (direct) {
+        writeCache(cacheKey, direct, getCacheTTL(url));
+        return direct;
+      }
+    } catch (e) {
+      console.warn('Direct API failed, fallback to proxy:', e);
+    }
     
     try {
       const resp = await fetch(url, { 
@@ -410,7 +670,7 @@
       </div>
       <div class="fund-list">
         ${enrichedHoldings.length > 0 ? enrichedHoldings.map(h => `
-          <div class="fund-item" data-code="${h.code}">
+          <div class="fund-item" data-code="${h.code}" data-name="${h.name || ''}">
             <div class="fund-info">
               <div class="fund-name">${h.name || h.code}</div>
               <div class="fund-meta">¥${fmt(h.amount)}</div>
@@ -447,7 +707,7 @@
     });
     
     page.querySelectorAll('.fund-item').forEach(item => {
-      item.onclick = () => openFundDetail(item.dataset.code);
+      item.onclick = () => openFundDetail(item.dataset.code, item.dataset.name);
     });
     
     const addBtn = page.querySelector('.add-holding-btn');
@@ -609,7 +869,7 @@
       </div>
       <div class="watch-list">
         ${enrichedWatch.length > 0 ? enrichedWatch.map(w => `
-          <div class="watch-item" data-code="${w.code}">
+          <div class="watch-item" data-code="${w.code}" data-name="${w.name || ''}">
             <div class="watch-info">
               <div class="watch-name">${w.name}</div>
               <div class="watch-code">${w.code}</div>
@@ -632,7 +892,7 @@
     });
     
     page.querySelectorAll('.watch-item').forEach(item => {
-      item.onclick = () => openFundDetail(item.dataset.code);
+      item.onclick = () => openFundDetail(item.dataset.code, item.dataset.name);
     });
   };
 
@@ -691,9 +951,14 @@
     const container = $('sectorSection');
     if (!container) return;
     
-    const resp = await api(`${API}?module=sector`, { action: 'streak' });
+    const resp = await api(`${API}?module=sector`, { action: 'streak', limit: 10 });
     if (resp.success) {
-      const sectors = resp.data || [];
+      const sectors = (resp.data || []).filter(s => !isEmptySector(s.code));
+      sectors.sort((a, b) => {
+        const va = parseFloat(String(a.change_percent).replace('%', '').replace('+', '')) || 0;
+        const vb = parseFloat(String(b.change_percent).replace('%', '').replace('+', '')) || 0;
+        return vb - va;
+      });
       const topSectors = sectors.slice(0, 10);
       container.innerHTML = `
         <div class="section-header" id="openSectorBtn">
@@ -822,7 +1087,9 @@
     
     const resp = await api(`${API}?module=fund`, { action: 'hot' });
     if (resp.success) {
-      hotList.innerHTML = resp.data.slice(0, 5).map((f, i) => `
+      const hotData = resp.data.filter(f => !isMoneyFund(f)).slice(0, 5);
+      hotData.forEach(f => rememberFundName(f.code, f.name));
+      hotList.innerHTML = hotData.map((f, i) => `
         <div class="hot-item" data-code="${f.code}" data-name="${f.name}">
           <span class="hot-rank">${i + 1}</span>
           <div class="hot-info">
@@ -841,20 +1108,26 @@
             fundPickerCallback(code, name);
             closeSearchModal();
           } else {
-            openFundDetail(code);
+            openFundDetail(code, name);
           }
         };
       });
     }
   };
 
+  let searchSeq = 0;
+
   const doSearch = debounce(async (keyword) => {
-    if (!keyword || keyword.length < 1) {
+    const safeKeyword = (keyword || '').trim();
+    if (!safeKeyword || safeKeyword.length < 1) {
+      // 取消未完成的搜索请求，避免旧结果覆盖
+      searchSeq += 1;
       $('searchResults').style.display = 'none';
       $('searchHistory').style.display = 'block';
       $('searchHot').style.display = 'block';
       return;
     }
+    const currentSeq = ++searchSeq;
     
     $('searchHistory').style.display = 'none';
     $('searchHot').style.display = 'none';
@@ -863,10 +1136,15 @@
     results.style.display = 'block';
     results.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
     
-    const resp = await api(`${API}?module=fund`, { action: 'search', keyword });
+    const resp = await api(`${API}?module=fund`, { action: 'search', keyword: safeKeyword });
+    if (currentSeq !== searchSeq || $('searchInput').value.trim() !== safeKeyword) {
+      return;
+    }
     
-    if (resp.success && resp.data.length > 0) {
-      results.innerHTML = resp.data.map(f => `
+    const safeData = resp.success ? resp.data.filter(f => !isMoneyFund(f)) : [];
+    if (resp.success && safeData.length > 0) {
+      safeData.forEach(f => rememberFundName(f.code, f.name));
+      results.innerHTML = safeData.map(f => `
         <div class="result-item" data-code="${f.code}" data-name="${f.name}">
           <div class="result-icon">基</div>
           <div class="result-info">
@@ -893,7 +1171,7 @@
             fundPickerCallback(code, name);
             closeSearchModal();
           } else {
-            openFundDetail(code);
+            openFundDetail(code, name);
           }
         };
       });
@@ -1093,31 +1371,31 @@
   // 弹层 - 基金详情
   // ==========================================
   
-  const openFundDetail = async (code) => {
+  let detailSeq = 0;
+  const formatPercent = (value) => {
+    if (value === undefined || value === null || value === '') return '--';
+    const num = parseFloat(String(value).replace('%', '').replace('+', ''));
+    if (isNaN(num)) return '--';
+    return `${sign(num)}${num}%`;
+  };
+
+  const openFundDetail = async (code, nameHint = '') => {
     const modal = $('detailModal');
     const page = $('detailPage');
     if (!modal || !page) return;
+    const currentSeq = ++detailSeq;
     
     modal.classList.add('active');
-    page.innerHTML = `
-      <div class="detail-header">
-        <button class="back-btn" id="detailBack">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M15 18l-6-6 6-6"/>
-          </svg>
-        </button>
-        <div class="detail-title-wrap">
-          <div class="detail-title">基金详情</div>
-          <div class="detail-code">${code}</div>
-        </div>
-      </div>
-      <div class="loading" style="padding-top:80px"><div class="spinner"></div></div>
-    `;
-    $('detailBack').onclick = closeDetailModal;
+    const resolvedName = getFundNameHint(code, nameHint) || code;
     
-    const resp = await api(`${API}?module=fund`, { action: 'detail', code });
-    
-    if (!resp.success) {
+    const renderDetail = (fund, { loadingDetails = false, loadingBase = false } = {}) => {
+      const displayName = (fund.name || resolvedName || code).trim();
+      const estimateText = formatPercent(fund.estimate_change);
+      const yearText = formatPercent(fund.year_change);
+      const estimateClass = estimateText === '--' ? '' : cls(fund.estimate_change);
+      const yearClass = yearText === '--' ? '' : cls(fund.year_change);
+      const fundCode = fund.code || code;
+      
       page.innerHTML = `
         <div class="detail-header">
           <button class="back-btn" id="detailBack">
@@ -1126,12 +1404,161 @@
             </svg>
           </button>
           <div class="detail-title-wrap">
-            <div class="detail-title">${code}</div>
+            <div class="detail-title">${displayName}</div>
+            <div class="detail-code">${fundCode}</div>
+          </div>
+        </div>
+        
+        <div class="detail-content">
+          <div class="detail-valuation">
+            <div class="valuation-main">
+              <div class="valuation-label">当日涨幅（估）</div>
+              <div class="valuation-value ${estimateClass}">${estimateText}</div>
+            </div>
+            <div class="valuation-info">
+              <div class="valuation-item">
+                <div class="valuation-item-label">近1年涨幅</div>
+                <div class="valuation-item-value ${yearClass}">${yearText}</div>
+              </div>
+              <div class="valuation-item">
+                <div class="valuation-item-label">最新净值</div>
+                <div class="valuation-item-value">${fund.nav || '--'}</div>
+              </div>
+              <div class="valuation-item">
+                <div class="valuation-item-label">估算时间</div>
+                <div class="valuation-item-value">${fund.estimate_time || '--'}</div>
+              </div>
+            </div>
+          </div>
+          
+          ${loadingDetails ? `
+            <div class="detail-sectors">
+              <div class="detail-section-title">关联板块</div>
+              <div class="empty-inline">加载中...</div>
+            </div>
+          ` : (fund.sectors && fund.sectors.length > 0 ? `
+            <div class="detail-sectors">
+              <div class="detail-section-title">关联板块</div>
+              <div class="sector-tags">
+                ${fund.sectors.map(s => `
+                  <span class="sector-tag" data-code="${s.code}" data-name="${s.name}">${s.name}</span>
+                `).join('')}
+              </div>
+            </div>
+          ` : '')}
+          
+          <div class="detail-stocks">
+            <div class="detail-section-title">基金重仓股</div>
+            ${loadingDetails ? `
+              <div class="empty-inline">加载中...</div>
+            ` : (fund.stocks && fund.stocks.length > 0 ? `
+              <div class="stocks-list">
+                ${fund.stocks.map((s, i) => `
+                  <div class="stock-item">
+                    <span class="stock-rank">${i + 1}</span>
+                    <div class="stock-info">
+                      <div class="stock-name">${s.name}</div>
+                      <div class="stock-code">${s.code}</div>
+                    </div>
+                    <div class="stock-metrics">
+                      <div class="stock-ratio">${s.ratio}</div>
+                      <div class="stock-change ${cls(s.change)}">${s.change !== undefined && s.change !== null && s.change !== '' ? `${sign(s.change)}${fmt(s.change)}%` : '--'}</div>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            ` : `
+              <div class="empty-inline">暂无重仓股数据</div>
+            `)}
+          </div>
+        </div>
+        
+        ${loadingBase ? `
+          <div class="loading" style="padding:16px 0"><div class="spinner"></div></div>
+        ` : ''}
+        <div class="detail-actions">
+          <button class="detail-action primary" id="editHoldingBtn">
+            ${Object.values(state.holdings).some(list => list.some(h => h.code === fundCode)) ? '修改持仓' : '添加持有'}
+          </button>
+          <button class="detail-action ${state.watchlist.some(w => w.code === fundCode) ? 'danger' : ''}" id="toggleWatchBtn">
+            ${state.watchlist.some(w => w.code === fundCode) ? '删自选' : '加自选'}
+          </button>
+        </div>
+      `;
+      
+      $('detailBack').onclick = closeDetailModal;
+      
+      page.querySelectorAll('.sector-tag').forEach(tag => {
+        tag.onclick = () => {
+          closeDetailModal();
+          openSectorFundsModal(tag.dataset.code, tag.dataset.name);
+        };
+      });
+      
+      $('toggleWatchBtn').onclick = () => {
+        const displayName = fund.name || resolvedName || fundCode;
+        if (state.watchlist.some(w => w.code === fundCode)) {
+          removeFromWatchlist(fundCode);
+        } else {
+          addToWatchlist(fundCode, displayName);
+        }
+        openFundDetail(code, displayName);
+      };
+      
+      $('editHoldingBtn').onclick = () => {
+        closeDetailModal();
+        const displayName = fund.name || resolvedName || fundCode;
+        // 打开新增持有弹层，预填基金信息
+        const defaultAccount = state.accounts[0]?.id;
+        addTargetAccount = defaultAccount;
+        addFormItems = [{ code: fundCode, name: displayName, amount: '', profit: '' }];
+        
+        for (const [accId, list] of Object.entries(state.holdings)) {
+          const existing = list.find(h => h.code === fundCode);
+          if (existing) {
+            addTargetAccount = accId;
+            addFormItems[0].amount = existing.amount;
+            addFormItems[0].profit = existing.profit;
+            break;
+          }
+        }
+        
+        renderAddForm();
+        $('addModal')?.classList.add('active');
+      };
+    };
+    
+    renderDetail({ code, name: resolvedName }, { loadingDetails: true, loadingBase: true });
+    
+    // 先拉取轻量信息，缩短首屏等待
+    const infoPromise = api(`${API}?module=fund`, { action: 'info', code }).catch(() => null);
+    const detailPromise = api(`${API}?module=fund`, { action: 'detail', code }).catch(() => null);
+    
+    const infoResp = await infoPromise;
+    if (currentSeq !== detailSeq) return;
+    if (infoResp?.success) {
+      rememberFundName(code, infoResp.data?.name);
+      renderDetail(infoResp.data || { code, name: resolvedName }, { loadingDetails: true });
+    }
+    
+    const resp = await detailPromise;
+    if (currentSeq !== detailSeq) return;
+    
+    if (!resp?.success) {
+      page.innerHTML = `
+        <div class="detail-header">
+          <button class="back-btn" id="detailBack">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 18l-6-6 6-6"/>
+            </svg>
+          </button>
+          <div class="detail-title-wrap">
+            <div class="detail-title">${resolvedName || code}</div>
           </div>
         </div>
         <div class="empty" style="padding-top:100px">
           <div class="empty-icon">❌</div>
-          <div class="empty-text">${resp.message || '获取失败'}</div>
+          <div class="empty-text">${resp?.message || '获取失败'}</div>
         </div>
       `;
       $('detailBack').onclick = closeDetailModal;
@@ -1139,132 +1566,13 @@
     }
     
     const fund = resp.data;
-    const isWatched = state.watchlist.some(w => w.code === fund.code);
-    const isHolding = Object.values(state.holdings).some(list => list.some(h => h.code === fund.code));
-    
-    page.innerHTML = `
-      <div class="detail-header">
-        <button class="back-btn" id="detailBack">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M15 18l-6-6 6-6"/>
-          </svg>
-        </button>
-        <div class="detail-title-wrap">
-          <div class="detail-title">${fund.name || code}</div>
-          <div class="detail-code">${fund.code}</div>
-        </div>
-      </div>
-      
-      <div class="detail-content">
-        <div class="detail-valuation">
-          <div class="valuation-main">
-            <div class="valuation-label">当日涨幅（估）</div>
-            <div class="valuation-value ${cls(fund.estimate_change)}">${sign(parseFloat(fund.estimate_change))}${fund.estimate_change}%</div>
-          </div>
-          <div class="valuation-info">
-            <div class="valuation-item">
-              <div class="valuation-item-label">近1年涨幅</div>
-              <div class="valuation-item-value ${cls(fund.year_change)}">${fund.year_change ? sign(parseFloat(fund.year_change)) + fund.year_change + '%' : '--'}</div>
-            </div>
-            <div class="valuation-item">
-              <div class="valuation-item-label">最新净值</div>
-              <div class="valuation-item-value">${fund.nav || '--'}</div>
-            </div>
-            <div class="valuation-item">
-              <div class="valuation-item-label">估算时间</div>
-              <div class="valuation-item-value">${fund.estimate_time || '--'}</div>
-            </div>
-          </div>
-        </div>
-        
-        ${fund.sectors && fund.sectors.length > 0 ? `
-          <div class="detail-sectors">
-            <div class="detail-section-title">关联板块</div>
-            <div class="sector-tags">
-              ${fund.sectors.map(s => `
-                <span class="sector-tag" data-code="${s.code}" data-name="${s.name}">${s.name}</span>
-              `).join('')}
-            </div>
-          </div>
-        ` : ''}
-        
-        <div class="detail-stocks">
-          <div class="detail-section-title">基金重仓股</div>
-          ${fund.stocks && fund.stocks.length > 0 ? `
-            <div class="stocks-list">
-              ${fund.stocks.map((s, i) => `
-                <div class="stock-item">
-                  <span class="stock-rank">${i + 1}</span>
-                  <div class="stock-info">
-                    <div class="stock-name">${s.name}</div>
-                    <div class="stock-code">${s.code}</div>
-                  </div>
-                  <div class="stock-metrics">
-                    <div class="stock-ratio">${s.ratio}</div>
-                    <div class="stock-change ${cls(s.change)}">${s.change !== undefined && s.change !== null && s.change !== '' ? `${sign(s.change)}${fmt(s.change)}%` : '--'}</div>
-                  </div>
-                </div>
-              `).join('')}
-            </div>
-          ` : `
-            <div class="empty-inline">暂无重仓股数据</div>
-          `}
-        </div>
-      </div>
-      
-      <div class="detail-actions">
-        <button class="detail-action primary" id="editHoldingBtn">
-          ${isHolding ? '修改持仓' : '添加持有'}
-        </button>
-        <button class="detail-action ${isWatched ? 'danger' : ''}" id="toggleWatchBtn">
-          ${isWatched ? '删自选' : '加自选'}
-        </button>
-      </div>
-    `;
-    
-    $('detailBack').onclick = closeDetailModal;
-    
-    // 关联板块点击
-    page.querySelectorAll('.sector-tag').forEach(tag => {
-      tag.onclick = () => {
-        closeDetailModal();
-        openSectorFundsModal(tag.dataset.code, tag.dataset.name);
-      };
-    });
-    
-    $('toggleWatchBtn').onclick = () => {
-      if (isWatched) {
-        removeFromWatchlist(fund.code);
-      } else {
-        addToWatchlist(fund.code, fund.name);
-      }
-      openFundDetail(code);
-    };
-    
-    $('editHoldingBtn').onclick = () => {
-      closeDetailModal();
-      // 打开新增持有弹层，预填基金信息
-      const defaultAccount = state.accounts[0]?.id;
-      addTargetAccount = defaultAccount;
-      addFormItems = [{ code: fund.code, name: fund.name, amount: '', profit: '' }];
-      
-      // 如果已持有，找到持有信息
-      for (const [accId, list] of Object.entries(state.holdings)) {
-        const existing = list.find(h => h.code === fund.code);
-        if (existing) {
-          addTargetAccount = accId;
-          addFormItems[0].amount = existing.amount;
-          addFormItems[0].profit = existing.profit;
-          break;
-        }
-      }
-      
-      renderAddForm();
-      $('addModal')?.classList.add('active');
-    };
+    rememberFundName(code, fund?.name);
+    renderDetail(fund, { loadingDetails: false });
   };
 
   const closeDetailModal = () => {
+    // 关闭时中断未完成的详情请求
+    detailSeq += 1;
     $('detailModal')?.classList.remove('active');
   };
 
@@ -1301,16 +1609,16 @@
       // 排序
       const sortField = state.sectorSort.field;
       const sortAsc = state.sectorSort.asc;
-      const sectors = [...resp.data];
+      const sectors = (resp.data || []).filter(s => !isEmptySector(s.code));
       
       sectors.sort((a, b) => {
         let va, vb;
         if (sortField === 'change') {
-          va = parseFloat(a.change_percent.replace('%', '').replace('+', ''));
-          vb = parseFloat(b.change_percent.replace('%', '').replace('+', ''));
+          va = parseFloat(String(a.change_percent).replace('%', '').replace('+', '')) || 0;
+          vb = parseFloat(String(b.change_percent).replace('%', '').replace('+', '')) || 0;
         } else {
-          va = a.streak_days;
-          vb = b.streak_days;
+          va = a.streak_days || 0;
+          vb = b.streak_days || 0;
         }
         return sortAsc ? va - vb : vb - va;
       });
@@ -1414,7 +1722,7 @@
         </div>
         <div class="fund-list">
           ${resp.data.map(f => `
-            <div class="fund-item" data-code="${f.code}">
+            <div class="fund-item" data-code="${f.code}" data-name="${f.name || ''}">
               <div class="fund-info">
                 <div class="fund-name">${f.name}</div>
                 <div class="fund-meta">${f.code}</div>
@@ -1428,7 +1736,7 @@
       content.querySelectorAll('.fund-item').forEach(item => {
         item.onclick = () => {
           closeSectorFundsModal();
-          openFundDetail(item.dataset.code);
+          openFundDetail(item.dataset.code, item.dataset.name);
         };
       });
     } else if (!resp.success) {
@@ -1439,10 +1747,13 @@
         </div>
       `;
     } else {
+      // 无真实基金数据的板块直接标记，后续从列表移除
+      markEmptySector(sectorCode, sectorName);
+      loadSectorSection();
       content.innerHTML = `
         <div class="empty">
           <div class="empty-icon">📊</div>
-          <div class="empty-text">暂无该板块基金数据</div>
+          <div class="empty-text">暂无该板块基金数据，已从列表移除</div>
         </div>
       `;
     }
@@ -1458,6 +1769,7 @@
   
   const addToWatchlist = (code, name) => {
     if (!code || state.watchlist.some(w => w.code === code)) return;
+    rememberFundName(code, name);
     state.watchlist.unshift({ code, name });
     saveWatchlist();
     toast('已添加到自选');
@@ -1570,7 +1882,29 @@
     document.addEventListener('gesturechange', e => e.preventDefault());
     
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      navigator.serviceWorker.register('/sw.js').then(reg => {
+        // 主动检查更新并让新 SW 尽快生效，避免旧资源缓存
+        reg.update().catch(() => {});
+        if (reg.waiting) {
+          reg.waiting.postMessage('skipWaiting');
+        }
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          if (!newWorker) return;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              newWorker.postMessage('skipWaiting');
+            }
+          });
+        });
+      }).catch(() => {});
+
+      let reloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (reloaded) return;
+        reloaded = true;
+        location.reload();
+      });
     }
     
     switchPage('hold');

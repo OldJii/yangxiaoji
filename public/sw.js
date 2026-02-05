@@ -3,7 +3,7 @@
  * 实现离线缓存和性能优化
  */
 
-const CACHE_VERSION = 'yangxiaoji-v2';
+const CACHE_VERSION = 'yangxiaoji-v4';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 

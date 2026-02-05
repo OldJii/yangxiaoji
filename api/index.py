@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import BaseHTTPRequestHandler
 
 import requests
+from requests.adapters import HTTPAdapter
 import urllib3
 urllib3.disable_warnings()
 
@@ -26,9 +27,17 @@ SESSION.headers.update({
     "Accept-Language": "zh-CN,zh;q=0.9",
     "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"
 })
+SESSION.mount("https://", HTTPAdapter(pool_connections=20, pool_maxsize=20))
+SESSION.mount("http://", HTTPAdapter(pool_connections=20, pool_maxsize=20))
 
 CACHE = {}
 CACHE_TTL = 60  # 默认缓存60秒
+ # 热门/板块等弱实时数据使用更长缓存，降低上游压力
+FUND_HOT_TTL = 10 * 60
+FUND_DETAIL_PART_TTL = 6 * 60 * 60
+SECTOR_STREAK_TTL = 10 * 60
+SECTOR_STREAK_ITEM_TTL = 30 * 60
+SECTOR_FUNDS_TTL = 15 * 60
 EASTMONEY_UT = "fa5fd1943c7b386f172d6893dbfba10b"
 MOBILE_DEVICE_ID = "874C427C-7C24-4980-A835-66FD40B67605"
 MOBILE_VERSION = "6.5.5"
@@ -162,6 +171,17 @@ def fund_search(keyword):
     
     # 排除的类别：高端理财、场内基金(ETF/LOF除外)、货币基金等不支持详情查询的
     EXCLUDE_CATEGORIES = {"高端理财", "私募", "银行理财", "信托", "保险", "券商理财"}
+
+    def _is_money_fund(category: str, ftype: str, name: str) -> bool:
+        """货币基金识别：名称/分类/类型任一命中即剔除。"""
+        category = category or ""
+        ftype = ftype or ""
+        name = name or ""
+        if "货币" in category or "货币" in ftype or "货币" in name:
+            return True
+        if "现金" in category or "现金" in ftype or "现金" in name:
+            return True
+        return False
     
     try:
         url = "https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx"
@@ -186,6 +206,9 @@ def fund_search(keyword):
                 if not code or len(code) != 6:
                     continue
                 
+                if _is_money_fund(category, ftype, item.get("NAME", "")):
+                    continue
+
                 results.append({
                     "code": code,
                     "name": item.get("NAME", ""),
@@ -264,6 +287,10 @@ def fund_info(code):
 
 
 def _fetch_fund_year_change(code):
+    cache_key = f"fund_year_change:{code}"
+    cached = get_cache(cache_key, ttl=FUND_DETAIL_PART_TTL)
+    if cached is not None:
+        return cached
     try:
         increase_url = "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNPeriodIncrease"
         params = {"FCODE": code, **_mobile_base_params()}
@@ -272,13 +299,20 @@ def _fetch_fund_year_change(code):
         for item in inc_data.get("Datas", []):
             title = item.get("title") or item.get("Title") or ""
             if title in ("1N", "近1年", "Y"):
-                return item.get("syl", "")
+                value = item.get("syl", "")
+                set_cache(cache_key, value, ttl=FUND_DETAIL_PART_TTL)
+                return value
     except requests.RequestException:
         return ""
+    set_cache(cache_key, "", ttl=FUND_DETAIL_PART_TTL)
     return ""
 
 
 def _fetch_fund_sectors(code):
+    cache_key = f"fund_sectors:{code}"
+    cached = get_cache(cache_key, ttl=FUND_DETAIL_PART_TTL)
+    if cached is not None:
+        return cached
     try:
         search_url = "https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx"
         search_resp = SESSION.get(search_url, params={"m": "1", "key": code}, timeout=5, verify=False)
@@ -286,9 +320,12 @@ def _fetch_fund_sectors(code):
         if search_data.get("Datas"):
             zt_info = search_data["Datas"][0].get("ZTJJInfo", [])
             if zt_info:
-                return [{"name": zt.get("TTYPENAME", ""), "code": zt.get("TTYPE", "")} for zt in zt_info[:3]]
+                result = [{"name": zt.get("TTYPENAME", ""), "code": zt.get("TTYPE", "")} for zt in zt_info[:3]]
+                set_cache(cache_key, result, ttl=FUND_DETAIL_PART_TTL)
+                return result
     except requests.RequestException:
         return []
+    set_cache(cache_key, [], ttl=FUND_DETAIL_PART_TTL)
     return []
 
 
@@ -326,6 +363,10 @@ def _fetch_stock_changes(codes):
 
 
 def _fetch_fund_stocks(code):
+    cache_key = f"fund_stocks:{code}"
+    cached = get_cache(cache_key, ttl=FUND_DETAIL_PART_TTL)
+    if cached is not None:
+        return cached
     stocks = []
     try:
         stocks_url = f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={code}&topline=10"
@@ -360,7 +401,9 @@ def _fetch_fund_stocks(code):
     for s in stocks:
         if s.get("code") in changes:
             s["change"] = changes.get(s["code"])
-    return stocks[:10]
+    result = stocks[:10]
+    set_cache(cache_key, result, ttl=FUND_DETAIL_PART_TTL)
+    return result
 
 
 def fund_detail(code):
@@ -416,7 +459,7 @@ def fund_batch(codes):
 def fund_hot():
     """获取热门基金"""
     cache_key = "hot_funds"
-    cached = get_cache(cache_key)
+    cached = get_cache(cache_key, ttl=FUND_HOT_TTL)
     if cached:
         return cached
     
@@ -442,6 +485,9 @@ def fund_hot():
         for item in items[:20]:
             parts = item.strip('"').split(',')
             if len(parts) >= 7:
+                if "货币" in (parts[1] or ""):
+                    # 过滤货币型基金，避免进入详情页无有效数据
+                    continue
                 results.append({
                     "code": parts[0],
                     "name": parts[1],
@@ -450,7 +496,7 @@ def fund_hot():
                 })
         
         result = {"success": True, "data": results}
-        set_cache(cache_key, result)
+        set_cache(cache_key, result, ttl=FUND_HOT_TTL)
         return result
     except Exception as e:
         return {"success": False, "message": f"获取热门失败: {str(e)}"}
@@ -587,6 +633,11 @@ def sector_list():
 
 def _calc_sector_streak_days(sector_code):
     """根据最近日K计算板块连涨/连跌天数"""
+    # 单板块连涨结果缓存，减少重复K线请求
+    cache_key = f"sector_streak:{sector_code}"
+    cached = get_cache(cache_key, ttl=SECTOR_STREAK_ITEM_TTL)
+    if cached is not None:
+        return cached
     url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
     params = {
         "secid": f"90.{sector_code}",
@@ -634,13 +685,15 @@ def _calc_sector_streak_days(sector_code):
             streak = streak + 1 if sign > 0 else streak - 1
         else:
             break
+    set_cache(cache_key, streak, ttl=SECTOR_STREAK_ITEM_TTL)
     return streak
 
 
-def sector_streak():
+def sector_streak(limit: int = None):
     """获取板块连涨/连跌数据"""
-    cache_key = "sector_streak"
-    cached = get_cache(cache_key, ttl=300)
+    limit_key = str(limit) if limit else "all"
+    cache_key = f"sector_streak:{limit_key}"
+    cached = get_cache(cache_key, ttl=SECTOR_STREAK_TTL)
     if cached:
         return cached
     
@@ -650,9 +703,12 @@ def sector_streak():
             return list_result
         
         sectors = list_result["data"]
+        if limit:
+            sectors = sectors[:limit]
         results = []
 
-        with ThreadPoolExecutor(max_workers=6) as executor:
+        max_workers = min(12, max(1, len(sectors)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(_calc_sector_streak_days, s["code"]): s for s in sectors}
             for future in as_completed(futures):
                 sector = futures[future]
@@ -668,7 +724,7 @@ def sector_streak():
         results.sort(key=lambda x: code_order.get(x.get("code", ""), 999))
 
         result = {"success": True, "data": results}
-        set_cache(cache_key, result, ttl=300)
+        set_cache(cache_key, result, ttl=SECTOR_STREAK_TTL)
         return result
     except Exception as e:
         return {"success": False, "message": f"获取板块数据失败: {str(e)}"}
@@ -707,7 +763,7 @@ def _fetch_sector_funds_by_code(sector_code):
 def sector_funds(sector_code, sector_name=""):
     """获取板块内基金列表"""
     cache_key = f"sector_funds:{sector_code}"
-    cached = get_cache(cache_key, ttl=300)
+    cached = get_cache(cache_key, ttl=SECTOR_FUNDS_TTL)
     if cached:
         return cached
     
@@ -722,7 +778,7 @@ def sector_funds(sector_code, sector_name=""):
             return {"success": False, "message": "板块基金数据为空"}
 
         result = {"success": True, "data": funds, "sector_name": sector_name}
-        set_cache(cache_key, result, ttl=300)
+        set_cache(cache_key, result, ttl=SECTOR_FUNDS_TTL)
         return result
     except Exception as e:
         return {"success": False, "message": f"获取板块基金失败: {str(e)}"}
@@ -828,7 +884,12 @@ def handle_request(params):
         if action == 'list':
             return sector_list()
         elif action == 'streak':
-            return sector_streak()
+            raw_limit = params.get('limit', [''])[0]
+            try:
+                limit = int(raw_limit) if raw_limit else None
+            except ValueError:
+                limit = None
+            return sector_streak(limit)
         elif action == 'funds':
             code = params.get('code', [''])[0]
             name = params.get('name', [''])[0]
