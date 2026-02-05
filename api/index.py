@@ -5,6 +5,7 @@
 """
 
 import json
+import os
 import re
 import time
 import random
@@ -39,8 +40,10 @@ SECTOR_STREAK_TTL = 10 * 60
 SECTOR_STREAK_ITEM_TTL = 30 * 60
 SECTOR_FUNDS_TTL = 15 * 60
 EASTMONEY_UT = "fa5fd1943c7b386f172d6893dbfba10b"
-MOBILE_DEVICE_ID = "874C427C-7C24-4980-A835-66FD40B67605"
-MOBILE_VERSION = "6.5.5"
+TIANTIAN_API_BASE = os.getenv(
+    "TIANTIAN_API_BASE",
+    "https://tiantian-fund-api.vercel.app/api/action"
+)
 
 
 def get_cache(key, ttl=None):
@@ -61,26 +64,55 @@ def set_cache(key, data, ttl=None):
         CACHE.pop(k, None)
 
 
-def _mobile_base_params():
-    return {
-        "product": "EFund",
-        "deviceid": MOBILE_DEVICE_ID,
-        "MobileKey": MOBILE_DEVICE_ID,
-        "plat": "Iphone",
-        "PhoneType": "IOS15.1.0",
-        "OSVersion": "15.5",
-        "version": MOBILE_VERSION,
-        "ServerVersion": MOBILE_VERSION,
-        "Version": MOBILE_VERSION,
-        "appVersion": MOBILE_VERSION,
-    }
-
-
 def _safe_json(resp):
     try:
         return resp.json()
     except (ValueError, json.JSONDecodeError):
         return None
+
+
+def _tiantian_action(action_name, params=None, timeout=8):
+    request_params = {"action_name": action_name}
+    if params:
+        request_params.update(params)
+    try:
+        resp = SESSION.get(
+            TIANTIAN_API_BASE,
+            params=request_params,
+            timeout=timeout,
+            verify=False
+        )
+    except requests.RequestException as e:
+        return None, str(e)
+    data = _safe_json(resp)
+    if data is None:
+        return None, "上游返回非JSON"
+    if isinstance(data, dict):
+        err_code = data.get("ErrCode")
+        if err_code not in (None, 0, "0", ""):
+            return None, data.get("ErrMsg") or "上游返回错误"
+    return data, None
+
+
+def _fetch_fund_gz(code):
+    url = f"https://fundgz.1234567.com.cn/js/{code}.js"
+    try:
+        resp = SESSION.get(url, timeout=5, verify=False)
+        match = re.search(r'jsonpgz\((.*)\)', resp.text)
+        if not match:
+            return None, "未找到基金"
+        data = json.loads(match.group(1))
+        return {
+            "code": data.get("fundcode", code),
+            "name": data.get("name", ""),
+            "nav": data.get("dwjz", ""),
+            "nav_date": data.get("jzrq", ""),
+            "estimate_nav": data.get("gsz", ""),
+            "estimate_change": data.get("gszzl", "0"),
+            "estimate_time": data.get("gztime", ""),
+        }, None
+    except (requests.RequestException, ValueError, json.JSONDecodeError) as e:
+        return None, str(e)
 
 
 # ==========================================
@@ -183,47 +215,47 @@ def fund_search(keyword):
             return True
         return False
     
-    try:
-        url = "https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx"
-        params = {"m": "1", "key": keyword, "pageindex": "0", "pagesize": "50"}
-        resp = SESSION.get(url, params=params, timeout=5, verify=False)
-        data = _safe_json(resp)
-        
-        results = []
-        if data and data.get("Datas"):
-            for item in data["Datas"]:
-                fund_base = item.get("FundBaseInfo") or {}
-                category = item.get("CATEGORYDESC", "")
-                ftype = fund_base.get("FTYPE", "")
-                code = item.get("CODE", "")
-                
-                # 只保留场外基金：有 FundBaseInfo 且不在排除类别
-                if not fund_base:
-                    continue
-                if category in EXCLUDE_CATEGORIES:
-                    continue
-                # 只保留6位代码的基金
-                if not code or len(code) != 6:
-                    continue
-                
-                if _is_money_fund(category, ftype, item.get("NAME", "")):
-                    continue
+    data, err = _tiantian_action(
+        "fundSearch",
+        {"m": "1", "key": keyword, "pageindex": "0", "pagesize": "50"},
+        timeout=6
+    )
+    if not data:
+        return {"success": False, "message": f"搜索失败: {err or '上游不可用'}"}
 
-                results.append({
-                    "code": code,
-                    "name": item.get("NAME", ""),
-                    "type": ftype,
-                    "category": category
-                })
-                
-                if len(results) >= 20:
-                    break
-        
-        result = {"success": True, "data": results}
-        set_cache(cache_key, result)
-        return result
-    except requests.RequestException as e:
-        return {"success": False, "message": f"搜索失败: {str(e)}"}
+    results = []
+    if data.get("Datas"):
+        for item in data["Datas"]:
+            fund_base = item.get("FundBaseInfo") or {}
+            category = item.get("CATEGORYDESC", "")
+            ftype = fund_base.get("FTYPE", "")
+            code = item.get("CODE", "")
+
+            # 只保留场外基金：有 FundBaseInfo 且不在排除类别
+            if not fund_base:
+                continue
+            if category in EXCLUDE_CATEGORIES:
+                continue
+            # 只保留6位代码的基金
+            if not code or len(code) != 6:
+                continue
+
+            if _is_money_fund(category, ftype, item.get("NAME", "")):
+                continue
+
+            results.append({
+                "code": code,
+                "name": item.get("NAME", ""),
+                "type": ftype,
+                "category": category
+            })
+
+            if len(results) >= 20:
+                break
+
+    result = {"success": True, "data": results}
+    set_cache(cache_key, result)
+    return result
 
 
 def fund_info(code):
@@ -232,38 +264,21 @@ def fund_info(code):
     cached = get_cache(cache_key, ttl=30)
     if cached:
         return cached
-    
-    url = f"https://fundgz.1234567.com.cn/js/{code}.js"
-    try:
-        resp = SESSION.get(url, timeout=5, verify=False)
-        match = re.search(r'jsonpgz\((.*)\)', resp.text)
-        if match:
-            data = json.loads(match.group(1))
-            result = {
-                "success": True,
-                "data": {
-                    "code": data.get("fundcode", code),
-                    "name": data.get("name", ""),
-                    "nav": data.get("dwjz", ""),
-                    "nav_date": data.get("jzrq", ""),
-                    "estimate_nav": data.get("gsz", ""),
-                    "estimate_change": data.get("gszzl", "0"),
-                    "estimate_time": data.get("gztime", ""),
-                }
-            }
-            set_cache(cache_key, result, ttl=30)
-            return result
-    except (requests.RequestException, ValueError, json.JSONDecodeError) as e:
-        last_error = str(e)
-    else:
-        last_error = "未找到基金"
+    fund_data, err = _fetch_fund_gz(code)
+    if fund_data:
+        result = {"success": True, "data": fund_data}
+        set_cache(cache_key, result, ttl=30)
+        return result
 
-    # 兜底：使用移动端详情接口获取基础信息
-    try:
-        detail_url = "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNDetailInformation"
-        params = {"FCODE": code, **_mobile_base_params()}
-        detail_resp = SESSION.get(detail_url, params=params, timeout=6, verify=False)
-        detail_data = _safe_json(detail_resp) or {}
+    last_error = err or "估值数据为空"
+
+    # 兜底：使用基金详情接口获取基础信息
+    detail_data, detail_err = _tiantian_action(
+        "fundMNDetailInformation",
+        {"FCODE": code},
+        timeout=6
+    )
+    if detail_data:
         datas = detail_data.get("Datas") or {}
         if datas:
             result = {
@@ -280,8 +295,8 @@ def fund_info(code):
             }
             set_cache(cache_key, result, ttl=30)
             return result
-    except requests.RequestException as e:
-        last_error = str(e)
+    if detail_err:
+        last_error = detail_err
 
     return {"success": False, "message": f"获取失败: {last_error}"}
 
@@ -291,19 +306,18 @@ def _fetch_fund_year_change(code):
     cached = get_cache(cache_key, ttl=FUND_DETAIL_PART_TTL)
     if cached is not None:
         return cached
-    try:
-        increase_url = "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNPeriodIncrease"
-        params = {"FCODE": code, **_mobile_base_params()}
-        inc_resp = SESSION.get(increase_url, params=params, timeout=6, verify=False)
-        inc_data = _safe_json(inc_resp) or {}
+    inc_data, _ = _tiantian_action(
+        "fundMNPeriodIncrease",
+        {"FCODE": code},
+        timeout=6
+    )
+    if inc_data:
         for item in inc_data.get("Datas", []):
             title = item.get("title") or item.get("Title") or ""
             if title in ("1N", "近1年", "Y"):
                 value = item.get("syl", "")
                 set_cache(cache_key, value, ttl=FUND_DETAIL_PART_TTL)
                 return value
-    except requests.RequestException:
-        return ""
     set_cache(cache_key, "", ttl=FUND_DETAIL_PART_TTL)
     return ""
 
@@ -313,18 +327,17 @@ def _fetch_fund_sectors(code):
     cached = get_cache(cache_key, ttl=FUND_DETAIL_PART_TTL)
     if cached is not None:
         return cached
-    try:
-        search_url = "https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx"
-        search_resp = SESSION.get(search_url, params={"m": "1", "key": code}, timeout=5, verify=False)
-        search_data = _safe_json(search_resp) or {}
-        if search_data.get("Datas"):
-            zt_info = search_data["Datas"][0].get("ZTJJInfo", [])
-            if zt_info:
-                result = [{"name": zt.get("TTYPENAME", ""), "code": zt.get("TTYPE", "")} for zt in zt_info[:3]]
-                set_cache(cache_key, result, ttl=FUND_DETAIL_PART_TTL)
-                return result
-    except requests.RequestException:
-        return []
+    search_data, _ = _tiantian_action(
+        "fundSearch",
+        {"m": "1", "key": code},
+        timeout=6
+    )
+    if search_data and search_data.get("Datas"):
+        zt_info = search_data["Datas"][0].get("ZTJJInfo", [])
+        if zt_info:
+            result = [{"name": zt.get("TTYPENAME", ""), "code": zt.get("TTYPE", "")} for zt in zt_info[:3]]
+            set_cache(cache_key, result, ttl=FUND_DETAIL_PART_TTL)
+            return result
     set_cache(cache_key, [], ttl=FUND_DETAIL_PART_TTL)
     return []
 
@@ -418,6 +431,20 @@ def fund_detail(code):
         return info_result
     
     fund_data = info_result["data"].copy()
+    detail_data, _ = _tiantian_action(
+        "fundMNDetailInformation",
+        {"FCODE": code},
+        timeout=6
+    )
+    datas = detail_data.get("Datas") if isinstance(detail_data, dict) else {}
+    if datas:
+        fund_data.setdefault("name", datas.get("SHORTNAME", "") or datas.get("FULLNAME", ""))
+        if not fund_data.get("nav"):
+            fund_data["nav"] = datas.get("DWJZ", "")
+        if not fund_data.get("nav_date"):
+            fund_data["nav_date"] = datas.get("FSRQ", "")
+        fund_data["perf_cmp"] = datas.get("PERFCMP", "")
+        fund_data["inv_tgt"] = datas.get("INVTGT", "")
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {
             "stocks": executor.submit(_fetch_fund_stocks, code),
@@ -462,7 +489,41 @@ def fund_hot():
     cached = get_cache(cache_key, ttl=FUND_HOT_TTL)
     if cached:
         return cached
-    
+
+    data, err = _tiantian_action(
+        "fundMNRank",
+        {
+            "FundType": "0",
+            "SortColumn": "SALESRANK_D",
+            "Sort": "desc",
+            "pageIndex": "1",
+            "pageSize": "20"
+        },
+        timeout=8
+    )
+    if data and data.get("Datas"):
+        results = []
+        for item in data["Datas"]:
+            code = item.get("FCODE", "")
+            name = item.get("SHORTNAME", "") or item.get("FULLNAME", "")
+            change = item.get("RZDF") or "0"
+            if not code or len(code) != 6:
+                continue
+            if "货币" in (name or ""):
+                continue
+            results.append({
+                "code": code,
+                "name": name,
+                "change": change,
+                "type": ""
+            })
+            if len(results) >= 20:
+                break
+        if results:
+            result = {"success": True, "data": results}
+            set_cache(cache_key, result, ttl=FUND_HOT_TTL)
+            return result
+
     try:
         url = "https://fund.eastmoney.com/data/rankhandler.aspx"
         params = {
@@ -474,12 +535,12 @@ def fund_hot():
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
         }
         resp = SESSION.get(url, params=params, headers=headers, timeout=10, verify=False)
-        
+
         text = resp.text
         match = re.search(r'datas:\[(.*?)\]', text)
         if not match:
             return {"success": False, "message": "解析数据失败"}
-        
+
         results = []
         items = match.group(1).split('","')
         for item in items[:20]:
@@ -494,12 +555,14 @@ def fund_hot():
                     "change": parts[6] if parts[6] else "0",
                     "type": "混合型"
                 })
-        
+
         result = {"success": True, "data": results}
         set_cache(cache_key, result, ttl=FUND_HOT_TTL)
         return result
-    except Exception as e:
+    except requests.RequestException as e:
         return {"success": False, "message": f"获取热门失败: {str(e)}"}
+
+
 
 
 # ==========================================
@@ -512,7 +575,7 @@ def market_indices():
     cached = get_cache(cache_key, ttl=30)
     if cached:
         return cached
-    
+
     try:
         url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
         params = {
@@ -521,37 +584,38 @@ def market_indices():
             "fields": "f2,f3,f4,f12,f14"
         }
         resp = SESSION.get(url, params=params, timeout=8, verify=False)
-        data = resp.json()
-        
+        data = _safe_json(resp) or {}
+
         indices = []
-        if data.get("data", {}).get("diff"):
-            for item in data["data"]["diff"]:
-                change = item.get("f4", 0)
-                change_pct = item.get("f3", 0)
-                indices.append({
-                    "name": item.get("f14", ""),
-                    "value": str(item.get("f2", 0)),
-                    "change": f"{'+' if change >= 0 else ''}{change}",
-                    "change_percent": f"{'+' if change_pct >= 0 else ''}{change_pct}%"
-                })
-        
+        for item in data.get("data", {}).get("diff", []) or []:
+            change = item.get("f4", 0) or 0
+            change_pct = item.get("f3", 0) or 0
+            indices.append({
+                "name": item.get("f14", ""),
+                "value": str(item.get("f2", 0)),
+                "change": f"{'+' if change >= 0 else ''}{change}",
+                "change_percent": f"{'+' if change_pct >= 0 else ''}{change_pct}%"
+            })
+
         if indices:
             result = {"success": True, "data": indices}
             set_cache(cache_key, result, ttl=30)
             return result
-    except:
-        pass
-    
+    except requests.RequestException as e:
+        last_error = str(e)
+    else:
+        last_error = "指数数据为空"
+
     # 备用方案：腾讯财经
     try:
         url = "https://qt.gtimg.cn/q=sh000001,sz399001,sz399006,sh000300"
         resp = SESSION.get(url, timeout=8, verify=False)
         text = resp.text
-        
+
         indices = []
         names = ["上证指数", "深证成指", "创业板指", "沪深300"]
         lines = text.strip().split('\n')
-        
+
         for i, line in enumerate(lines):
             if '~' not in line:
                 continue
@@ -563,15 +627,15 @@ def market_indices():
                     "change": parts[31],
                     "change_percent": f"{parts[32]}%"
                 })
-        
+
         if indices:
             result = {"success": True, "data": indices}
             set_cache(cache_key, result, ttl=30)
             return result
-    except Exception as e:
-        return {"success": False, "message": f"获取指数失败: {str(e)}"}
-    
-    return {"success": False, "message": "获取指数失败: 所有数据源不可用"}
+    except requests.RequestException as e:
+        last_error = str(e)
+
+    return {"success": False, "message": f"获取指数失败: {last_error}"}
 
 
 # ==========================================
@@ -873,7 +937,7 @@ def handle_request(params):
         
         elif action == 'hot':
             return fund_hot()
-    
+
     # 市场模块
     if module == 'market':
         if action == 'indices':

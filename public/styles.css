@@ -39,7 +39,7 @@
   /* 尺寸 */
   --header-height: 44px;
   --tabbar-height: 50px;
-  --index-bar-height: 36px;
+  --index-bar-height: 0px;
 }
 
 /* ==========================================
@@ -260,55 +260,6 @@ body {
 
 .tab-label {
   font-size: 10px;
-}
-
-/* ==========================================
-   底部指数栏
-   ========================================== */
-
-.index-bar {
-  position: fixed;
-  bottom: calc(var(--tabbar-height) + var(--safe-bottom));
-  left: 0;
-  right: 0;
-  height: var(--index-bar-height);
-  background: var(--bg-white);
-  border-top: 1px solid var(--border-light);
-  display: flex;
-  align-items: center;
-  padding: 0 16px;
-  gap: 8px;
-  z-index: 99;
-}
-
-.index-name {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.index-value {
-  font-size: 14px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  color: var(--text);
-}
-
-.index-change,
-.index-percent {
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
-
-.index-toggle {
-  margin-left: auto;
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: none;
-  color: var(--text-muted);
 }
 
 /* ==========================================
@@ -787,9 +738,6 @@ body {
   font-weight: 500;
 }
 
-.fund-section-arrow {
-  color: var(--text-muted);
-}
 
 .fund-section-item {
   display: flex;
@@ -1637,38 +1585,6 @@ body {
   height: 20px;
 }
 
-/* 板块总览页 */
-.sector-page {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  padding-top: var(--safe-top);
-}
-
-.sector-header {
-  display: flex;
-  align-items: center;
-  height: var(--header-height);
-  padding: 0 16px;
-  background: var(--bg-white);
-  border-bottom: 1px solid var(--border-light);
-}
-
-.sector-title {
-  flex: 1;
-  text-align: center;
-  font-size: 17px;
-  font-weight: 600;
-  margin-right: 28px;
-}
-
-.sector-content {
-  flex: 1;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  background: var(--bg-white);
-}
-
 .sector-table-header {
   display: flex;
   padding: 12px 16px;
@@ -1771,6 +1687,20 @@ body {
 
 .empty-text {
   font-size: 14px;
+}
+
+.retry-btn {
+  margin-top: 12px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--primary);
+  border: 1px solid var(--primary-light);
+  background: var(--primary-light);
+  border-radius: 6px;
+}
+
+.retry-btn:active {
+  opacity: 0.7;
 }
 
 /* 加载状态 */
@@ -2238,6 +2168,56 @@ body {
   margin-bottom: 16px;
 }
 
+.detail-tab-card {
+  background: var(--bg-white);
+  padding: 16px;
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+
+.detail-tabs {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.detail-tab {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  padding: 6px 0;
+  position: relative;
+}
+
+.detail-tab.active {
+  color: var(--text);
+}
+
+
+.detail-info-item {
+  margin-bottom: 12px;
+}
+
+.detail-info-item:last-child {
+  margin-bottom: 0;
+}
+
+.detail-info-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.detail-info-content {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
 .valuation-main {
   text-align: center;
   margin-bottom: 20px;
@@ -2404,7 +2384,6 @@ body {
 }
 
 /* 板块总览页优化 */
-.sector-page,
 .sector-funds-page {
   height: 100%;
   background: var(--bg);
@@ -2439,7 +2418,6 @@ body {
   cursor: pointer;
 }
 
-.sector-content,
 .sector-funds-content {
   flex: 1;
   overflow-y: auto;
@@ -2521,9 +2499,4 @@ body {
 .section-title {
   font-size: 16px;
   font-weight: 600;
-}
-
-.section-arrow {
-  font-size: 13px;
-  color: var(--text-muted);
 }

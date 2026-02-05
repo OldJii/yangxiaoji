@@ -41,6 +41,8 @@
     searchHistory: [],
     emptySectors: [],
     fundNameMap: {},
+    detailTab: 'stocks',
+    sectorOverview: null,
     // 排序状态
     holdSort: { field: 'profit', asc: false },
     watchSort: { field: 'change', asc: false },
@@ -74,6 +76,21 @@
     const n = parseFloat(String(v).replace('%', '').replace('+', ''));
     if (isNaN(n)) return '';
     return n > 0 ? 'rise' : n < 0 ? 'fall' : '';
+  };
+
+  const escapeHtml = (value) => {
+    if (value === undefined || value === null) return '';
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  };
+
+  const formatMultiline = (value) => {
+    if (!value) return '';
+    return escapeHtml(value).replace(/\r?\n/g, '<br>');
   };
 
   const debounce = (fn, delay) => {
@@ -187,6 +204,10 @@
   const readCache = (key) => {
     const cached = state.cache[key];
     if (!cached) return null;
+    if (cached.data && cached.data.success === false) {
+      delete state.cache[key];
+      return null;
+    }
     const ttl = cached.ttl || CACHE_TTL;
     if (Date.now() - cached.ts < ttl) return cached.data;
     delete state.cache[key];
@@ -231,6 +252,9 @@
     if (!code || isEmptySector(code)) return;
     state.emptySectors.push(code);
     saveEmptySectors();
+    if (Array.isArray(state.sectorOverview)) {
+      state.sectorOverview = state.sectorOverview.filter(item => item.code !== code);
+    }
     toast(`${name || '该'}板块暂无基金数据，已移出列表`);
   };
 
@@ -267,29 +291,6 @@
     await Promise.allSettled(runners);
   };
 
-  const directMarketIndices = async () => {
-    const url = new URL('https://push2.eastmoney.com/api/qt/ulist.np/get');
-    url.searchParams.set('fltt', '2');
-    url.searchParams.set('secids', '1.000001,0.399001,0.399006,1.000300');
-    url.searchParams.set('fields', 'f2,f3,f4,f12,f14');
-
-    const data = await fetchJson(url);
-    const diff = data?.data?.diff || [];
-    if (!diff.length) throw new Error('empty');
-
-    const indices = diff.map(item => {
-      const change = Number(item.f4 || 0);
-      const changePct = Number(item.f3 || 0);
-      return {
-        name: item.f14 || '',
-        value: String(item.f2 ?? ''),
-        change: `${change >= 0 ? '+' : ''}${change}`,
-        change_percent: `${changePct >= 0 ? '+' : ''}${changePct}%`
-      };
-    });
-
-    return { success: true, data: indices };
-  };
 
   const directSectorList = async () => {
     const url = new URL('https://push2.eastmoney.com/api/qt/clist/get');
@@ -408,24 +409,28 @@
     const module = url.searchParams.get('module') || '';
     const action = url.searchParams.get('action') || '';
     const key = `${module}:${action}`;
-    if (key === 'market:indices') return directMarketIndices();
     if (key === 'sector:list') return directSectorList();
     if (key === 'sector:streak') return directSectorStreak(url);
     return null;
   };
 
-  const api = async (endpoint, params = {}) => {
+  const api = async (endpoint, params = {}, options = {}) => {
+    const { force = false } = options;
     const url = new URL(endpoint, location.origin);
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
     
     const cacheKey = url.toString();
-    const cached = readCache(cacheKey);
-    if (cached) return cached;
+    if (!force) {
+      const cached = readCache(cacheKey);
+      if (cached && cached.success !== false) return cached;
+    }
 
     try {
       const direct = await tryDirectApi(url);
       if (direct) {
-        writeCache(cacheKey, direct, getCacheTTL(url));
+        if (direct.success !== false) {
+          writeCache(cacheKey, direct, getCacheTTL(url));
+        }
         return direct;
       }
     } catch (e) {
@@ -439,7 +444,9 @@
       });
       const data = await resp.json();
       
-      writeCache(cacheKey, data, getCacheTTL(url));
+      if (data && data.success !== false) {
+        writeCache(cacheKey, data, getCacheTTL(url));
+      }
       return data;
     } catch (e) {
       console.error('API Error:', e);
@@ -919,11 +926,15 @@
     loadSectorSection();
   };
 
-  const loadIndices = async () => {
+  const loadIndices = async (options = {}) => {
     const container = $('indexCards');
     if (!container) return;
-    
-    const resp = await api(`${API}?module=market`, { action: 'indices' });
+
+    const resp = await api(
+      `${API}?module=market`,
+      { action: 'indices' },
+      options
+    );
     if (resp.success && resp.data.length > 0) {
       container.innerHTML = resp.data.map(idx => {
         const changeClass = cls(idx.change_percent) || 'flat';
@@ -935,59 +946,108 @@
         </div>
       `;
       }).join('');
-      
-      const sh = resp.data[0];
-      if (sh) {
-        $('indexValue').textContent = sh.value;
-        $('indexChange').textContent = sh.change;
-        $('indexChange').className = `index-change ${cls(sh.change_percent)}`;
-        $('indexPercent').textContent = sh.change_percent;
-        $('indexPercent').className = `index-percent ${cls(sh.change_percent)}`;
-      }
+      return;
     }
+
+    container.innerHTML = `
+      <div class="empty-inline">
+        <div>指数数据加载失败</div>
+        <button class="retry-btn" id="retryIndices">点击重试</button>
+      </div>
+    `;
+    $('retryIndices')?.addEventListener('click', () => loadIndices({ force: true }));
   };
 
-  const loadSectorSection = async () => {
+  const renderSectorOverview = (container, sectors) => {
+    const sortField = state.sectorSort.field;
+    const sortAsc = state.sectorSort.asc;
+    const sorted = [...sectors];
+    sorted.sort((a, b) => {
+      let va, vb;
+      if (sortField === 'change') {
+        va = parseFloat(String(a.change_percent).replace('%', '').replace('+', '')) || 0;
+        vb = parseFloat(String(b.change_percent).replace('%', '').replace('+', '')) || 0;
+      } else {
+        va = a.streak_days || 0;
+        vb = b.streak_days || 0;
+      }
+      return sortAsc ? va - vb : vb - va;
+    });
+
+    const changeActive = sortField === 'change';
+    const streakActive = sortField === 'streak';
+
+    container.innerHTML = `
+      <div class="section-header">
+        <span class="section-title">板块总览</span>
+      </div>
+      <div class="sector-table-header">
+        <span class="sector-col-name">板块名称</span>
+        <span class="sector-col sortable ${changeActive ? 'active' : ''}" data-sort="change">
+          当日涨幅 ${changeActive ? (sortAsc ? '↑' : '↓') : ''}
+        </span>
+        <span class="sector-col sortable ${streakActive ? 'active' : ''}" data-sort="streak">
+          连涨天数 ${streakActive ? (sortAsc ? '↑' : '↓') : ''}
+        </span>
+      </div>
+      <div class="sector-list">
+        ${sorted.map(s => `
+          <div class="sector-item" data-code="${s.code}" data-name="${s.name}">
+            <div class="sector-info">
+              <div class="sector-name">${s.name}</div>
+            </div>
+            <div class="sector-col-value ${cls(s.change_percent)}">${s.change_percent}</div>
+            <div class="sector-col-value ${s.streak_days >= 0 ? 'rise' : 'fall'}">${s.streak_days}天</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+
+    container.querySelectorAll('.sortable').forEach(el => {
+      el.onclick = () => {
+        const field = el.dataset.sort;
+        if (state.sectorSort.field === field) {
+          state.sectorSort.asc = !state.sectorSort.asc;
+        } else {
+          state.sectorSort.field = field;
+          state.sectorSort.asc = false;
+        }
+        renderSectorOverview(container, sectors);
+      };
+    });
+
+    container.querySelectorAll('.sector-item').forEach(item => {
+      item.onclick = () => openSectorFundsModal(item.dataset.code, item.dataset.name);
+    });
+  };
+
+  const loadSectorSection = async (options = {}) => {
     const container = $('sectorSection');
     if (!container) return;
-    
-    const resp = await api(`${API}?module=sector`, { action: 'streak', limit: 10 });
+
+    if (!options.force && Array.isArray(state.sectorOverview) && state.sectorOverview.length > 0) {
+      renderSectorOverview(container, state.sectorOverview);
+      return;
+    }
+
+    const resp = await api(
+      `${API}?module=sector`,
+      { action: 'streak' },
+      options
+    );
     if (resp.success) {
       const sectors = (resp.data || []).filter(s => !isEmptySector(s.code));
-      sectors.sort((a, b) => {
-        const va = parseFloat(String(a.change_percent).replace('%', '').replace('+', '')) || 0;
-        const vb = parseFloat(String(b.change_percent).replace('%', '').replace('+', '')) || 0;
-        return vb - va;
-      });
-      const topSectors = sectors.slice(0, 10);
-      container.innerHTML = `
-        <div class="section-header" id="openSectorBtn">
-          <span class="section-title">板块总览</span>
-          <span class="section-arrow">全部 ›</span>
-        </div>
-        <div class="sector-list sector-list-compact">
-          ${topSectors.map(s => `
-            <div class="sector-item" data-code="${s.code}" data-name="${s.name}">
-              <div class="sector-info">
-                <div class="sector-name">${s.name}</div>
-              </div>
-              <div class="sector-col-value ${cls(s.change_percent)}">${s.change_percent}</div>
-              <div class="sector-col-value ${s.streak_days >= 0 ? 'rise' : 'fall'}">${s.streak_days}天</div>
-            </div>
-          `).join('')}
-        </div>
-      `;
-      $('openSectorBtn').onclick = () => openSectorModal();
-      container.querySelectorAll('.sector-item').forEach(item => {
-        item.onclick = () => openSectorFundsModal(item.dataset.code, item.dataset.name);
-      });
+      state.sectorOverview = sectors;
+      renderSectorOverview(container, sectors);
     } else {
       container.innerHTML = `
         <div class="empty">
           <div class="empty-icon">📊</div>
           <div class="empty-text">${resp.message || '板块数据获取失败'}</div>
+          <button class="retry-btn" id="retrySector">点击重试</button>
         </div>
       `;
+      $('retrySector')?.addEventListener('click', () => loadSectorSection({ force: true }));
     }
   };
 
@@ -1379,13 +1439,15 @@
     return `${sign(num)}${num}%`;
   };
 
-  const openFundDetail = async (code, nameHint = '') => {
+  const openFundDetail = async (code, nameHint = '', options = {}) => {
     const modal = $('detailModal');
     const page = $('detailPage');
     if (!modal || !page) return;
     const currentSeq = ++detailSeq;
+    const { force = false } = options;
     
     modal.classList.add('active');
+    state.detailTab = 'stocks';
     const resolvedName = getFundNameHint(code, nameHint) || code;
     
     const renderDetail = (fund, { loadingDetails = false, loadingBase = false } = {}) => {
@@ -1395,6 +1457,15 @@
       const estimateClass = estimateText === '--' ? '' : cls(fund.estimate_change);
       const yearClass = yearText === '--' ? '' : cls(fund.year_change);
       const fundCode = fund.code || code;
+      const perfCmp = formatMultiline(fund.perf_cmp);
+      const invTgt = formatMultiline(fund.inv_tgt);
+      const hasFundIntro = !!(perfCmp || invTgt);
+      const availableTabs = ['stocks', 'intro'];
+      let activeTab = state.detailTab;
+      if (!availableTabs.includes(activeTab)) {
+        activeTab = availableTabs[0];
+        state.detailTab = activeTab;
+      }
       
       page.innerHTML = `
         <div class="detail-header">
@@ -1446,31 +1517,59 @@
               </div>
             </div>
           ` : '')}
-          
-          <div class="detail-stocks">
-            <div class="detail-section-title">基金重仓股</div>
-            ${loadingDetails ? `
-              <div class="empty-inline">加载中...</div>
-            ` : (fund.stocks && fund.stocks.length > 0 ? `
-              <div class="stocks-list">
-                ${fund.stocks.map((s, i) => `
-                  <div class="stock-item">
-                    <span class="stock-rank">${i + 1}</span>
-                    <div class="stock-info">
-                      <div class="stock-name">${s.name}</div>
-                      <div class="stock-code">${s.code}</div>
+
+          <div class="detail-tab-card">
+            <div class="detail-tabs">
+              <button class="detail-tab ${activeTab === 'stocks' ? 'active' : ''}" data-tab="stocks">基金重仓股</button>
+              <button class="detail-tab ${activeTab === 'intro' ? 'active' : ''}" data-tab="intro">基金概要</button>
+            </div>
+            <div class="detail-tab-panels">
+              <div class="detail-tab-panel ${activeTab === 'stocks' ? '' : 'is-hidden'}">
+                <div class="detail-stocks">
+                  ${loadingDetails ? `
+                    <div class="empty-inline">加载中...</div>
+                  ` : (fund.stocks && fund.stocks.length > 0 ? `
+                    <div class="stocks-list">
+                      ${fund.stocks.map((s, i) => `
+                        <div class="stock-item">
+                          <span class="stock-rank">${i + 1}</span>
+                          <div class="stock-info">
+                            <div class="stock-name">${s.name}</div>
+                            <div class="stock-code">${s.code}</div>
+                          </div>
+                          <div class="stock-metrics">
+                            <div class="stock-ratio">${s.ratio}</div>
+                            <div class="stock-change ${cls(s.change)}">${s.change !== undefined && s.change !== null && s.change !== '' ? `${sign(s.change)}${fmt(s.change)}%` : '--'}</div>
+                          </div>
+                        </div>
+                      `).join('')}
                     </div>
-                    <div class="stock-metrics">
-                      <div class="stock-ratio">${s.ratio}</div>
-                      <div class="stock-change ${cls(s.change)}">${s.change !== undefined && s.change !== null && s.change !== '' ? `${sign(s.change)}${fmt(s.change)}%` : '--'}</div>
+                  ` : `
+                    <div class="empty-inline">暂无重仓股数据</div>
+                  `)}
+                </div>
+              </div>
+              <div class="detail-tab-panel ${activeTab === 'intro' ? '' : 'is-hidden'}">
+                ${loadingDetails && !hasFundIntro ? `
+                  <div class="empty-inline">加载中...</div>
+                ` : (hasFundIntro ? `
+                  <div class="detail-info">
+                    <div class="detail-info-item">
+                      <div class="detail-info-label">业绩比较基准</div>
+                      <div class="detail-info-content">${perfCmp || '--'}</div>
+                    </div>
+                    <div class="detail-info-item">
+                      <div class="detail-info-label">投资目标</div>
+                      <div class="detail-info-content">${invTgt || '--'}</div>
                     </div>
                   </div>
-                `).join('')}
+                ` : `
+                  <div class="empty-inline">暂无概要信息</div>
+                `)}
               </div>
-            ` : `
-              <div class="empty-inline">暂无重仓股数据</div>
-            `)}
+            </div>
           </div>
+          
         </div>
         
         ${loadingBase ? `
@@ -1487,6 +1586,13 @@
       `;
       
       $('detailBack').onclick = closeDetailModal;
+
+      page.querySelectorAll('.detail-tab').forEach(tab => {
+        tab.onclick = () => {
+          state.detailTab = tab.dataset.tab;
+          renderDetail(fund, { loadingDetails, loadingBase });
+        };
+      });
       
       page.querySelectorAll('.sector-tag').forEach(tag => {
         tag.onclick = () => {
@@ -1531,8 +1637,16 @@
     renderDetail({ code, name: resolvedName }, { loadingDetails: true, loadingBase: true });
     
     // 先拉取轻量信息，缩短首屏等待
-    const infoPromise = api(`${API}?module=fund`, { action: 'info', code }).catch(() => null);
-    const detailPromise = api(`${API}?module=fund`, { action: 'detail', code }).catch(() => null);
+    const infoPromise = api(
+      `${API}?module=fund`,
+      { action: 'info', code },
+      { force }
+    ).catch(() => null);
+    const detailPromise = api(
+      `${API}?module=fund`,
+      { action: 'detail', code },
+      { force }
+    ).catch(() => null);
     
     const infoResp = await infoPromise;
     if (currentSeq !== detailSeq) return;
@@ -1559,9 +1673,11 @@
         <div class="empty" style="padding-top:100px">
           <div class="empty-icon">❌</div>
           <div class="empty-text">${resp?.message || '获取失败'}</div>
+          <button class="retry-btn" id="retryDetail">点击重试</button>
         </div>
       `;
       $('detailBack').onclick = closeDetailModal;
+      $('retryDetail')?.addEventListener('click', () => openFundDetail(code, resolvedName, { force: true }));
       return;
     }
     
@@ -1577,122 +1693,14 @@
   };
 
   // ==========================================
-  // 弹层 - 板块总览
-  // ==========================================
-  
-  const openSectorModal = async () => {
-    const modal = $('sectorModal');
-    const page = $('sectorPage');
-    if (!modal || !page) return;
-    
-    modal.classList.add('active');
-    page.innerHTML = `
-      <div class="modal-header">
-        <button class="back-btn" id="sectorBack">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M15 18l-6-6 6-6"/>
-          </svg>
-        </button>
-        <h1 class="modal-title">板块总览</h1>
-      </div>
-      <div class="sector-content">
-        <div class="loading"><div class="spinner"></div></div>
-      </div>
-    `;
-    
-    $('sectorBack').onclick = closeSectorModal;
-    
-    const resp = await api(`${API}?module=sector`, { action: 'streak' });
-    const content = page.querySelector('.sector-content');
-    
-    if (resp.success) {
-      // 排序
-      const sortField = state.sectorSort.field;
-      const sortAsc = state.sectorSort.asc;
-      const sectors = (resp.data || []).filter(s => !isEmptySector(s.code));
-      
-      sectors.sort((a, b) => {
-        let va, vb;
-        if (sortField === 'change') {
-          va = parseFloat(String(a.change_percent).replace('%', '').replace('+', '')) || 0;
-          vb = parseFloat(String(b.change_percent).replace('%', '').replace('+', '')) || 0;
-        } else {
-          va = a.streak_days || 0;
-          vb = b.streak_days || 0;
-        }
-        return sortAsc ? va - vb : vb - va;
-      });
-      
-      const changeActive = sortField === 'change';
-      const streakActive = sortField === 'streak';
-      
-      content.innerHTML = `
-        <div class="sector-table-header">
-          <span class="sector-col-name">板块名称</span>
-          <span class="sector-col sortable ${changeActive ? 'active' : ''}" data-sort="change">
-            当日涨幅 ${changeActive ? (sortAsc ? '↑' : '↓') : ''}
-          </span>
-          <span class="sector-col sortable ${streakActive ? 'active' : ''}" data-sort="streak">
-            连涨天数 ${streakActive ? (sortAsc ? '↑' : '↓') : ''}
-          </span>
-        </div>
-        <div class="sector-list">
-          ${sectors.map(s => `
-            <div class="sector-item" data-code="${s.code}" data-name="${s.name}">
-              <div class="sector-info">
-                <div class="sector-name">${s.name}</div>
-              </div>
-              <div class="sector-col-value ${cls(s.change_percent)}">${s.change_percent}</div>
-              <div class="sector-col-value ${s.streak_days >= 0 ? 'rise' : 'fall'}">${s.streak_days}天</div>
-            </div>
-          `).join('')}
-        </div>
-      `;
-      
-      // 排序点击
-      content.querySelectorAll('.sortable').forEach(el => {
-        el.onclick = () => {
-          const field = el.dataset.sort;
-          if (state.sectorSort.field === field) {
-            state.sectorSort.asc = !state.sectorSort.asc;
-          } else {
-            state.sectorSort.field = field;
-            state.sectorSort.asc = false;
-          }
-          openSectorModal();
-        };
-      });
-      
-      // 板块点击
-      content.querySelectorAll('.sector-item').forEach(item => {
-        item.onclick = () => {
-          closeSectorModal();
-          openSectorFundsModal(item.dataset.code, item.dataset.name);
-        };
-      });
-    }
-    if (!resp.success && content) {
-      content.innerHTML = `
-        <div class="empty">
-          <div class="empty-icon">📊</div>
-          <div class="empty-text">${resp.message || '板块数据获取失败'}</div>
-        </div>
-      `;
-    }
-  };
-
-  const closeSectorModal = () => {
-    $('sectorModal')?.classList.remove('active');
-  };
-
-  // ==========================================
   // 弹层 - 板块基金
   // ==========================================
   
-  const openSectorFundsModal = async (sectorCode, sectorName) => {
+  const openSectorFundsModal = async (sectorCode, sectorName, options = {}) => {
     const modal = $('sectorFundsModal');
     const page = $('sectorFundsPage');
     if (!modal || !page) return;
+    const { force = false } = options;
     
     modal.classList.add('active');
     page.innerHTML = `
@@ -1711,7 +1719,11 @@
     
     $('sectorFundsBack').onclick = closeSectorFundsModal;
     
-    const resp = await api(`${API}?module=sector`, { action: 'funds', code: sectorCode, name: sectorName });
+    const resp = await api(
+      `${API}?module=sector`,
+      { action: 'funds', code: sectorCode, name: sectorName },
+      { force }
+    );
     const content = page.querySelector('.sector-funds-content');
     
     if (resp.success && resp.data.length > 0) {
@@ -1744,8 +1756,10 @@
         <div class="empty">
           <div class="empty-icon">📊</div>
           <div class="empty-text">${resp.message || '板块基金获取失败'}</div>
+          <button class="retry-btn" id="retrySectorFunds">点击重试</button>
         </div>
       `;
+      $('retrySectorFunds')?.addEventListener('click', () => openSectorFundsModal(sectorCode, sectorName, { force: true }));
     } else {
       // 无真实基金数据的板块直接标记，后续从列表移除
       markEmptySector(sectorCode, sectorName);

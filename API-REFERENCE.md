@@ -131,6 +131,8 @@ GET /api/fund?action=detail&code=161725
     "estimate_time": "11:30:00",
     "nav": "1.2345",
     "nav_date": "2026-02-01",
+    "perf_cmp": "中证白酒指数收益率*90%+上证国债指数收益率*10%",
+    "inv_tgt": "通过精选白酒产业链优质标的，在控制风险的前提下力争实现长期稳健增值。",
     "stocks": [
       {
         "code": "600519",
@@ -162,68 +164,6 @@ GET /api/fund?action=hot
       "type": "指数型"
     }
   ]
-}
-```
-
----
-
-## 市场 API (`/api/market`)
-
-### 1. 获取主要指数
-
-**请求**
-```
-GET /api/market?action=indices
-```
-
-**响应**
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "name": "上证指数",
-      "value": "3456.78",
-      "change": "-12.34",
-      "change_percent": "-0.35%"
-    },
-    {
-      "name": "深证成指",
-      "value": "12345.67",
-      "change": "+45.67",
-      "change_percent": "+0.37%"
-    }
-  ]
-}
-```
-
-### 2. 获取基金涨跌分布
-
-**请求**
-```
-GET /api/market?action=distribution
-```
-
-**响应**
-```json
-{
-  "success": true,
-  "data": {
-    "distribution": {
-      "lt_neg5": 205,
-      "neg5_neg3": 913,
-      "neg3_neg1": 6467,
-      "neg1_0": 6114,
-      "zero": 530,
-      "0_1": 5485,
-      "1_3": 149,
-      "3_5": 0,
-      "gt_5": 0
-    },
-    "up_count": 5634,
-    "down_count": 13699,
-    "update_time": "2026-02-02 11:10"
-  }
 }
 ```
 
@@ -315,7 +255,6 @@ GET /api/sector?action=detail&name=电网设备
 | 端点 | 服务端缓存 | Edge缓存 | 客户端缓存 |
 |------|----------|---------|-----------|
 | /api/fund | 30s | 60s | 30s |
-| /api/market | 10s | 30s | 10s |
 | /api/sector | 60s | 60s | 60s |
 
 ## 性能优化说明
